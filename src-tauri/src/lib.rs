@@ -1,11 +1,12 @@
 use keyring::{Entry, Error as KeyringError};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::time::Duration;
 
 const PROVIDER_SECRET_SERVICE: &str = "io.github.fouri7.pilotbell.provider";
+const OPENAI_RESPONSES_KIND: &str = "openai-responses";
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -18,6 +19,7 @@ struct AssistantReply {
 #[serde(rename_all = "camelCase")]
 struct ProviderConfig {
     id: String,
+    kind: String,
     name: String,
     endpoint: String,
     model: String,
@@ -54,6 +56,18 @@ struct ResponseContent {
 #[derive(Deserialize)]
 struct ResponseError {
     message: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    OpenAiResponses,
+}
+
+struct ProviderAdapter {
+    healthcheck_prompt: &'static str,
+    validate: fn(&ProviderConfig) -> Result<(), ProviderCommandError>,
+    build_payload: fn(&ProviderConfig, &str) -> Value,
+    parse_response: fn(&str, ResponseEnvelope) -> Result<String, ProviderCommandError>,
 }
 
 #[derive(Serialize)]
@@ -126,7 +140,34 @@ impl ProviderCommandError {
     }
 }
 
-fn validate_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
+fn parse_provider_kind(kind: &str) -> Result<ProviderKind, ProviderCommandError> {
+    match kind.trim() {
+        OPENAI_RESPONSES_KIND => Ok(ProviderKind::OpenAiResponses),
+        "" => Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider type is missing.",
+            false,
+        )),
+        other => Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            format!("Unsupported provider type: {other}"),
+            false,
+        )),
+    }
+}
+
+fn provider_adapter(kind: ProviderKind) -> ProviderAdapter {
+    match kind {
+        ProviderKind::OpenAiResponses => ProviderAdapter {
+            healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
+            validate: validate_openai_responses_provider,
+            build_payload: build_openai_responses_payload,
+            parse_response: parse_openai_responses_output,
+        },
+    }
+}
+
+fn validate_provider(provider: &ProviderConfig) -> Result<ProviderAdapter, ProviderCommandError> {
     if provider.id.trim().is_empty() {
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
@@ -146,18 +187,26 @@ fn validate_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandErr
         ));
     }
 
-    if !provider.endpoint.starts_with("https://") {
-        return Err(ProviderCommandError::new(
-            ProviderErrorKind::Validation,
-            "Provider endpoint must start with https://",
-            false,
-        ));
-    }
-
     if !provider.has_secret {
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
             "Provider secret is missing. Re-enter the API key and save the provider again.",
+            false,
+        ));
+    }
+
+    let adapter = provider_adapter(parse_provider_kind(&provider.kind)?);
+    (adapter.validate)(provider)?;
+    Ok(adapter)
+}
+
+fn validate_openai_responses_provider(
+    provider: &ProviderConfig,
+) -> Result<(), ProviderCommandError> {
+    if !provider.endpoint.starts_with("https://") {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider endpoint must start with https://",
             false,
         ));
     }
@@ -230,7 +279,14 @@ fn preview_text(raw: &str) -> Option<String> {
     Some(preview)
 }
 
-fn extract_output_text(parsed: &ResponseEnvelope) -> Option<String> {
+fn build_openai_responses_payload(provider: &ProviderConfig, prompt: &str) -> Value {
+    json!({
+        "model": provider.model,
+        "input": prompt,
+    })
+}
+
+fn extract_openai_output_text(parsed: &ResponseEnvelope) -> Option<String> {
     let mut text_chunks = Vec::new();
 
     for item in parsed.output.as_ref().into_iter().flatten() {
@@ -257,9 +313,27 @@ fn extract_output_text(parsed: &ResponseEnvelope) -> Option<String> {
     }
 }
 
+fn parse_openai_responses_output(
+    raw: &str,
+    parsed: ResponseEnvelope,
+) -> Result<String, ProviderCommandError> {
+    extract_openai_output_text(&parsed).ok_or_else(|| {
+        let details = preview_text(raw)
+            .map(Cow::Owned)
+            .unwrap_or_else(|| Cow::Borrowed("Response contained no message output."));
+        ProviderCommandError::new(
+            ProviderErrorKind::ResponseFormat,
+            "No output text was found in the provider response.",
+            false,
+        )
+        .with_details(details)
+    })
+}
+
 async fn call_provider(
     prompt: &str,
     provider: ProviderConfig,
+    adapter: ProviderAdapter,
 ) -> Result<AssistantReply, ProviderCommandError> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -270,10 +344,7 @@ async fn call_provider(
         ));
     }
 
-    let payload = json!({
-        "model": provider.model,
-        "input": prompt,
-    });
+    let payload = (adapter.build_payload)(&provider, prompt);
     let api_key = read_provider_secret(&provider.id)?;
 
     let response = reqwest::Client::builder()
@@ -363,17 +434,7 @@ async fn call_provider(
         .with_details(details)
     })?;
 
-    let content = extract_output_text(&parsed).ok_or_else(|| {
-        let details = preview_text(&raw)
-            .map(Cow::Owned)
-            .unwrap_or_else(|| Cow::Borrowed("Response contained no message output."));
-        ProviderCommandError::new(
-            ProviderErrorKind::ResponseFormat,
-            "No output text was found in the provider response.",
-            false,
-        )
-        .with_details(details)
-    })?;
+    let content = (adapter.parse_response)(&raw, parsed)?;
 
     Ok(AssistantReply {
         content,
@@ -446,13 +507,7 @@ async fn delete_provider_secret(
 #[tauri::command]
 async fn test_provider(provider: ProviderConfig) -> ProviderCommandResult<ProviderHealth> {
     let result = match validate_provider(&provider) {
-        Ok(()) => {
-            call_provider(
-                "Reply exactly with: PilotBell provider test OK",
-                provider.clone(),
-            )
-            .await
-        }
+        Ok(adapter) => call_provider(adapter.healthcheck_prompt, provider.clone(), adapter).await,
         Err(error) => Err(error),
     };
 
@@ -475,7 +530,7 @@ async fn handle_prompt(
     provider: ProviderConfig,
 ) -> ProviderCommandResult<AssistantReply> {
     let result = match validate_provider(&provider) {
-        Ok(()) => call_provider(&prompt, provider).await,
+        Ok(adapter) => call_provider(&prompt, provider, adapter).await,
         Err(error) => Err(error),
     };
 

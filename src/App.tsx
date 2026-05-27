@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  DEFAULT_PROVIDER_KIND,
   type ProviderConfig,
   type ProviderDraft,
+  type ProviderKind,
   isProviderDraftValid,
   makeProviderId,
   normalizeProviderDraft,
@@ -59,6 +61,14 @@ type InlineStatus = {
   message: string;
 };
 
+const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
+  { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
+];
+
+function providerKindLabel(kind: ProviderKind) {
+  return PROVIDER_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
+}
+
 function toneForProviderError(error: ProviderCommandError): StatusTone {
   if (
     error.kind === "validation" ||
@@ -96,6 +106,7 @@ function App() {
   const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({
+    kind: DEFAULT_PROVIDER_KIND,
     name: "OpenAI",
     endpoint: "https://api.openai.com/v1/responses",
     apiKey: "",
@@ -165,6 +176,7 @@ function App() {
         storedProviderIds.push(provider.id);
         migratedProviders.push({
           id: provider.id,
+          kind: provider.kind ?? DEFAULT_PROVIDER_KIND,
           name: provider.name,
           endpoint: provider.endpoint,
           model: provider.model,
@@ -199,6 +211,7 @@ function App() {
   function applyOpenAIPreset() {
     setProviderDraft((current) => ({
       ...current,
+      kind: DEFAULT_PROVIDER_KIND,
       name: current.name.trim() || "OpenAI",
       endpoint: "https://api.openai.com/v1/responses",
       model: current.model.trim() || "gpt-5.4-mini",
@@ -217,6 +230,7 @@ function App() {
 
     const nextProvider: ProviderConfig = {
       id: makeProviderId(),
+      kind: normalized.kind,
       name: normalized.name,
       endpoint: normalized.endpoint,
       model: normalized.model,
@@ -394,9 +408,25 @@ function App() {
         <div className="section-title">Provider settings</div>
         <p className="helper">
           Provider metadata stays in PilotBell storage. API keys are saved separately in the
-          OS credential store through Rust/Tauri.
+          OS credential store through Rust/Tauri. The adapter path is now keyed by provider
+          type, starting with {providerKindLabel(DEFAULT_PROVIDER_KIND)}.
         </p>
         <div className="grid">
+          <select
+            value={providerDraft.kind}
+            onChange={(event) =>
+              setProviderDraft({
+                ...providerDraft,
+                kind: event.currentTarget.value as ProviderKind,
+              })
+            }
+          >
+            {PROVIDER_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <input
             value={providerDraft.name}
             onChange={(event) =>
@@ -457,7 +487,7 @@ function App() {
                   onClick={() => setSelectedProviderId(provider.id)}
                   disabled={isProviderActionsDisabled}
                 >
-                  {provider.name} / {provider.model}
+                  {provider.name} / {provider.model} / {providerKindLabel(provider.kind)}
                 </button>
                 <button
                   type="button"
