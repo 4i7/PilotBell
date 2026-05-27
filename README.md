@@ -12,7 +12,7 @@ The project is currently in an early MVP stage. The current milestone includes a
 - Response display area
 - Provider registration settings (name / endpoint / model / API key)
 - Local provider list saved in browser storage
-- Rust backend command that forwards prompts to registered provider APIs
+- Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
 
 Planned next steps include a global shortcut, a compact spotlight-style window, provider adapters for remote and local models, and optional local knowledge-base integrations.
 
@@ -44,9 +44,26 @@ Build a desktop bundle:
 npm run tauri build
 ```
 
-## Windows 11 Development Notes (Primary Target)
+The Windows installer for general users is generated as an NSIS `.exe` bundle:
 
-If your main target is Windows 11, validate Rust/Tauri on Windows host (PowerShell or cmd), not Linux/WSL:
+```powershell
+npm run build:windows-installer
+```
+
+After the build finishes, look in:
+
+```text
+src-tauri\target\release\bundle\nsis\
+```
+
+This project is configured to produce a user-friendly Windows installer with:
+
+- a standard `.exe` installer
+- Start menu shortcut creation
+- Japanese and English installer language support
+- automatic WebView2 bootstrapper download when needed
+
+For the current desktop validation path, use a Windows host with `stable-msvc`; Linux-native dependency errors are not blockers for this target.
 
 ```powershell
 rustup default stable-msvc
@@ -55,20 +72,16 @@ cd src-tauri
 cargo check
 ```
 
-Tauri prerequisites on Windows:
-- MSVC Build Tools
-- Microsoft Edge WebView2
-
-Linux native dependency errors (`glib-2.0`, `gobject-2.0`) are not blockers when your release target is Windows-only.
-
 ## Project Layout
 
 - `src/App.tsx` - minimal React UI
 - `src/App.css` - application styling
-- `src-tauri/src/lib.rs` - Tauri command handler
+- `src/domain/provider.ts` - provider types and normalization
+- `src/lib/providerStore.ts` - browser storage persistence helpers
+- `src-tauri/src/lib.rs` - Tauri command handler and provider bridge
 - `src-tauri/tauri.conf.json` - Tauri app configuration
 
 ## Next Phase Hooks
 
 - Phase 2: add `@tauri-apps/plugin-global-shortcut` and spotlight-style window toggle.
-- Phase 3: add provider adapters for OpenAI, Anthropic, Ollama, llama.cpp, Obsidian vaults, and local KB search.
+- Phase 3: move API keys to secure storage and add provider adapters for OpenAI, Anthropic, Ollama, llama.cpp, Obsidian vaults, and local KB search.

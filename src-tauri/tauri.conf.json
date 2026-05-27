@@ -25,13 +25,36 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "4i7",
+    "homepage": "https://github.com/4i7/PilotBell",
+    "copyright": "Copyright (c) 2026 4i7",
+    "category": "Productivity",
+    "shortDescription": "A lightweight desktop AI command palette.",
+    "longDescription": "PilotBell is a lightweight desktop AI command palette built with Tauri, Rust, React, and TypeScript. This installer is intended for general Windows users and sets up the desktop app with standard shortcuts.",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Japanese", "English"],
+        "displayLanguageSelector": false,
+        "startMenuFolder": "PilotBell",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    }
   }
 }
