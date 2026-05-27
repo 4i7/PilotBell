@@ -2,11 +2,24 @@ export type ProviderConfig = {
   id: string;
   name: string;
   endpoint: string;
+  model: string;
+  hasSecret: boolean;
+};
+
+export type ProviderDraft = {
+  name: string;
+  endpoint: string;
   apiKey: string;
   model: string;
 };
 
-export type ProviderDraft = Omit<ProviderConfig, "id">;
+export type LegacyProviderConfig = {
+  id: string;
+  name: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+};
 
 export function makeProviderId() {
   return `provider-${crypto.randomUUID()}`;

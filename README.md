@@ -2,7 +2,7 @@
 
 PilotBell is a lightweight desktop AI command palette built with Tauri v2, Rust, React, and TypeScript.
 
-The project is currently in an early MVP stage. The current milestone includes an open provider registration UI where anyone using the app can add an AI endpoint + API key and call that provider directly from the prompt screen.
+The project is currently in an early MVP stage. The current milestone includes an open provider registration UI where anyone using the app can add an AI endpoint and call that provider directly from the prompt screen.
 
 ## Current Scope
 
@@ -11,7 +11,8 @@ The project is currently in an early MVP stage. The current milestone includes a
 - Send button
 - Response display area
 - Provider registration settings (name / endpoint / model / API key)
-- Local provider list saved in browser storage
+- Local provider metadata saved in browser storage
+- Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend command that forwards prompts to registered provider APIs
 
 Planned next steps include a global shortcut, a compact spotlight-style window, provider adapters for remote and local models, and optional local knowledge-base integrations.
@@ -43,6 +44,12 @@ Build a desktop bundle:
 ```powershell
 npm run tauri build
 ```
+
+## Provider Secret Storage
+
+- Provider metadata is stored in browser localStorage for the current desktop profile.
+- Provider API keys are stored separately in the OS credential store from the Rust/Tauri side.
+- Existing browser-stored provider secrets are migrated on startup when possible.
 
 ## Windows 11 Development Notes (Primary Target)
 

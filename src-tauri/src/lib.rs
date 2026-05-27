@@ -1,8 +1,11 @@
+use keyring::{Entry, Error as KeyringError};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::borrow::Cow;
 use std::time::Duration;
+
+const PROVIDER_SECRET_SERVICE: &str = "io.github.fouri7.pilotbell.provider";
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -14,10 +17,18 @@ struct AssistantReply {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ProviderConfig {
+    id: String,
     name: String,
     endpoint: String,
-    api_key: String,
     model: String,
+    has_secret: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderSecretInput {
+    provider_id: String,
+    api_key: String,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +60,7 @@ struct ResponseError {
 #[serde(rename_all = "snake_case")]
 enum ProviderErrorKind {
     Validation,
+    SecretStore,
     Timeout,
     Network,
     Provider,
@@ -68,6 +80,13 @@ struct ProviderCommandError {
 
 #[derive(Serialize)]
 struct ProviderHealth {
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderSecretStatus {
+    provider_id: String,
     message: String,
 }
 
@@ -108,9 +127,16 @@ impl ProviderCommandError {
 }
 
 fn validate_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
+    if provider.id.trim().is_empty() {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider id is missing.",
+            false,
+        ));
+    }
+
     if provider.name.trim().is_empty()
         || provider.endpoint.trim().is_empty()
-        || provider.api_key.trim().is_empty()
         || provider.model.trim().is_empty()
     {
         return Err(ProviderCommandError::new(
@@ -128,7 +154,62 @@ fn validate_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandErr
         ));
     }
 
+    if !provider.has_secret {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider secret is missing. Re-enter the API key and save the provider again.",
+            false,
+        ));
+    }
+
     Ok(())
+}
+
+fn validate_secret_input(input: &ProviderSecretInput) -> Result<(), ProviderCommandError> {
+    if input.provider_id.trim().is_empty() {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider id is missing.",
+            false,
+        ));
+    }
+
+    if input.api_key.trim().is_empty() {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "API key is required.",
+            false,
+        ));
+    }
+
+    Ok(())
+}
+
+fn provider_secret_entry(provider_id: &str) -> Result<Entry, ProviderCommandError> {
+    Entry::new(PROVIDER_SECRET_SERVICE, provider_id).map_err(|error| {
+        ProviderCommandError::new(
+            ProviderErrorKind::SecretStore,
+            format!("Failed to access the OS credential store: {error}"),
+            false,
+        )
+    })
+}
+
+fn read_provider_secret(provider_id: &str) -> Result<String, ProviderCommandError> {
+    provider_secret_entry(provider_id)?
+        .get_password()
+        .map_err(|error| match error {
+            KeyringError::NoEntry => ProviderCommandError::new(
+                ProviderErrorKind::Validation,
+                "Provider secret is missing. Re-enter the API key and save the provider again.",
+                false,
+            ),
+            other => ProviderCommandError::new(
+                ProviderErrorKind::SecretStore,
+                format!("Failed to read provider secret: {other}"),
+                false,
+            ),
+        })
 }
 
 fn preview_text(raw: &str) -> Option<String> {
@@ -193,6 +274,7 @@ async fn call_provider(
         "model": provider.model,
         "input": prompt,
     });
+    let api_key = read_provider_secret(&provider.id)?;
 
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -206,7 +288,7 @@ async fn call_provider(
         })?
         .post(&provider.endpoint)
         .header(CONTENT_TYPE, "application/json")
-        .header(AUTHORIZATION, format!("Bearer {}", provider.api_key))
+        .header(AUTHORIZATION, format!("Bearer {api_key}"))
         .json(&payload)
         .send()
         .await
@@ -301,6 +383,67 @@ async fn call_provider(
 }
 
 #[tauri::command]
+async fn store_provider_secret(
+    input: ProviderSecretInput,
+) -> ProviderCommandResult<ProviderSecretStatus> {
+    let result = validate_secret_input(&input).and_then(|_| {
+        provider_secret_entry(&input.provider_id)?
+            .set_password(input.api_key.trim())
+            .map_err(|error| {
+                ProviderCommandError::new(
+                    ProviderErrorKind::SecretStore,
+                    format!("Failed to store provider secret: {error}"),
+                    false,
+                )
+            })?;
+
+        Ok(ProviderSecretStatus {
+            provider_id: input.provider_id.clone(),
+            message: "Provider secret saved to the OS credential store.".into(),
+        })
+    });
+
+    match result {
+        Ok(status) => ProviderCommandResult::Success { data: status },
+        Err(error) => ProviderCommandResult::Error { error },
+    }
+}
+
+#[tauri::command]
+async fn delete_provider_secret(
+    provider_id: String,
+) -> ProviderCommandResult<ProviderSecretStatus> {
+    let trimmed = provider_id.trim();
+    let result = if trimmed.is_empty() {
+        Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider id is missing.",
+            false,
+        ))
+    } else {
+        match provider_secret_entry(trimmed) {
+            Ok(entry) => match entry.delete_credential() {
+                Ok(()) | Err(KeyringError::NoEntry) => Ok(ProviderSecretStatus {
+                    provider_id,
+                    message: "Provider secret removed from the OS credential store.".into(),
+                }),
+                Err(error) => Err(ProviderCommandError::new(
+                    ProviderErrorKind::SecretStore,
+                    format!("Failed to remove provider secret: {error}"),
+                    false,
+                )),
+            },
+            Err(error) => Err(error),
+        }
+    };
+
+    match result {
+        Ok(status) => ProviderCommandResult::Success { data: status },
+        Err(error) => ProviderCommandResult::Error { error },
+    }
+}
+
+#[tauri::command]
 async fn test_provider(provider: ProviderConfig) -> ProviderCommandResult<ProviderHealth> {
     let result = match validate_provider(&provider) {
         Ok(()) => {
@@ -346,7 +489,12 @@ async fn handle_prompt(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![handle_prompt, test_provider])
+        .invoke_handler(tauri::generate_handler![
+            delete_provider_secret,
+            handle_prompt,
+            store_provider_secret,
+            test_provider
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

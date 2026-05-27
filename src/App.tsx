@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   type ProviderConfig,
@@ -7,7 +7,7 @@ import {
   makeProviderId,
   normalizeProviderDraft,
 } from "./domain/provider";
-import { loadProviders, saveProviders } from "./lib/providerStore";
+import { loadProviderState, saveProviders } from "./lib/providerStore";
 import "./App.css";
 
 type AssistantReply = {
@@ -18,6 +18,7 @@ type AssistantReply = {
 
 type ProviderErrorKind =
   | "validation"
+  | "secret_store"
   | "timeout"
   | "network"
   | "provider"
@@ -33,6 +34,11 @@ type ProviderCommandError = {
 };
 
 type ProviderHealth = {
+  message: string;
+};
+
+type ProviderSecretStatus = {
+  providerId: string;
   message: string;
 };
 
@@ -54,30 +60,40 @@ type InlineStatus = {
 };
 
 function toneForProviderError(error: ProviderCommandError): StatusTone {
-  if (error.kind === "validation" || error.kind === "response_format") {
+  if (
+    error.kind === "validation" ||
+    error.kind === "response_format" ||
+    error.kind === "secret_store"
+  ) {
     return "warning";
   }
 
   return "error";
 }
 
-function fallbackCommandError(message: string): ProviderCommandError {
+function localValidationError(message: string): ProviderCommandError {
   return {
-    kind: "internal",
+    kind: "validation",
     message,
     retryable: false,
   };
 }
 
 function App() {
+  const [initialProviderState] = useState(() => loadProviderState());
   const [prompt, setPrompt] = useState("");
   const [reply, setReply] = useState<AssistantReply | null>(null);
   const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
+  const [isSavingProvider, setIsSavingProvider] = useState(false);
+  const [isMigratingProviders, setIsMigratingProviders] = useState(
+    initialProviderState.legacyProviders.length > 0,
+  );
+  const [removingProviderId, setRemovingProviderId] = useState("");
   const [providerStatus, setProviderStatus] = useState<InlineStatus | null>(null);
 
-  const [providers, setProviders] = useState<ProviderConfig[]>(() => loadProviders());
+  const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({
     name: "OpenAI",
@@ -96,6 +112,90 @@ function App() {
     saveProviders(next);
   }
 
+  async function storeProviderSecret(providerId: string, apiKey: string) {
+    return invoke<CommandResult<ProviderSecretStatus>>("store_provider_secret", {
+      input: {
+        providerId,
+        apiKey,
+      },
+    });
+  }
+
+  async function deleteProviderSecret(providerId: string) {
+    return invoke<CommandResult<ProviderSecretStatus>>("delete_provider_secret", {
+      providerId,
+    });
+  }
+
+  useEffect(() => {
+    if (initialProviderState.legacyProviders.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function rollbackSecrets(providerIds: string[]) {
+      await Promise.allSettled(providerIds.map((providerId) => deleteProviderSecret(providerId)));
+    }
+
+    async function migrateLegacyProviders() {
+      setProviderStatus({
+        tone: "neutral",
+        message: `Migrating ${initialProviderState.legacyProviders.length} existing provider secret(s) into the OS credential store...`,
+      });
+
+      const migratedProviders: ProviderConfig[] = [];
+      const storedProviderIds: string[] = [];
+
+      for (const provider of initialProviderState.legacyProviders) {
+        const result = await storeProviderSecret(provider.id, provider.apiKey);
+        if (result.status === "error") {
+          await rollbackSecrets(storedProviderIds);
+          if (!cancelled) {
+            setProviderStatus({
+              tone: toneForProviderError(result.error),
+              message:
+                "Legacy provider migration failed. Browser-stored providers were left unchanged. Resolve credential-store access and restart PilotBell.",
+            });
+            setIsMigratingProviders(false);
+          }
+          return;
+        }
+
+        storedProviderIds.push(provider.id);
+        migratedProviders.push({
+          id: provider.id,
+          name: provider.name,
+          endpoint: provider.endpoint,
+          model: provider.model,
+          hasSecret: true,
+        });
+      }
+
+      if (cancelled) {
+        await rollbackSecrets(storedProviderIds);
+        return;
+      }
+
+      setProviders((current) => {
+        const next = [...current, ...migratedProviders];
+        saveProviders(next);
+        return next;
+      });
+      setProviderStatus({
+        tone: "success",
+        message: `Migrated ${migratedProviders.length} provider secret(s) into the OS credential store.`,
+      });
+      setIsMigratingProviders(false);
+    }
+
+    void migrateLegacyProviders();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialProviderState.legacyProviders]);
+
   function applyOpenAIPreset() {
     setProviderDraft((current) => ({
       ...current,
@@ -105,7 +205,7 @@ function App() {
     }));
   }
 
-  function addProvider() {
+  async function addProvider() {
     const normalized = normalizeProviderDraft(providerDraft);
     if (!isProviderDraftValid(normalized)) {
       setProviderStatus({
@@ -115,29 +215,80 @@ function App() {
       return;
     }
 
-    const nextProvider: ProviderConfig = { id: makeProviderId(), ...normalized };
-    const next = [...providers, nextProvider];
-    persistProviders(next);
-    setSelectedProviderId(nextProvider.id);
-    setProviderDraft({
-      ...normalized,
-      apiKey: "",
-    });
+    const nextProvider: ProviderConfig = {
+      id: makeProviderId(),
+      name: normalized.name,
+      endpoint: normalized.endpoint,
+      model: normalized.model,
+      hasSecret: true,
+    };
+
+    setIsSavingProvider(true);
     setProviderStatus({
-      tone: "success",
-      message: `Saved ${nextProvider.name}. Select it and run Test API before sending prompts.`,
+      tone: "neutral",
+      message: `Saving ${nextProvider.name} into the OS credential store...`,
     });
+
+    try {
+      const secretResult = await storeProviderSecret(nextProvider.id, normalized.apiKey);
+      if (secretResult.status === "error") {
+        setProviderStatus({
+          tone: toneForProviderError(secretResult.error),
+          message: secretResult.error.message,
+        });
+        return;
+      }
+
+      const next = [...providers, nextProvider];
+      persistProviders(next);
+      setSelectedProviderId(nextProvider.id);
+      setProviderDraft({
+        ...normalized,
+        apiKey: "",
+      });
+      setProviderStatus({
+        tone: "success",
+        message: `Saved ${nextProvider.name}. Metadata stays in PilotBell, and the API key now lives in the OS credential store.`,
+      });
+    } catch (err) {
+      setProviderStatus({
+        tone: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsSavingProvider(false);
+    }
   }
 
-  function removeProvider(id: string) {
-    const next = providers.filter((provider) => provider.id !== id);
-    persistProviders(next);
-    if (selectedProviderId === id) {
-      setSelectedProviderId("");
+  async function removeProvider(id: string) {
+    setRemovingProviderId(id);
+
+    try {
+      const result = await deleteProviderSecret(id);
+      if (result.status === "error") {
+        setProviderStatus({
+          tone: toneForProviderError(result.error),
+          message: result.error.message,
+        });
+        return;
+      }
+
+      const next = providers.filter((provider) => provider.id !== id);
+      persistProviders(next);
+      if (selectedProviderId === id) {
+        setSelectedProviderId("");
+      }
       setProviderStatus({
         tone: "neutral",
-        message: "Selected provider removed. Save or select another provider.",
+        message: "Provider metadata and stored secret were removed.",
       });
+    } catch (err) {
+      setProviderStatus({
+        tone: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setRemovingProviderId("");
     }
   }
 
@@ -183,11 +334,11 @@ function App() {
 
   async function sendPrompt() {
     if (!selectedProvider) {
-      setReplyError(fallbackCommandError("Select a provider before sending."));
+      setReplyError(localValidationError("Select a provider before sending."));
       return;
     }
     if (!prompt.trim()) {
-      setReplyError(fallbackCommandError("Prompt is empty."));
+      setReplyError(localValidationError("Prompt is empty."));
       return;
     }
 
@@ -219,12 +370,15 @@ function App() {
     } catch (err) {
       setReply(null);
       setReplyError(
-        fallbackCommandError(err instanceof Error ? err.message : String(err)),
+        localValidationError(err instanceof Error ? err.message : String(err)),
       );
     } finally {
       setIsSending(false);
     }
   }
+
+  const isProviderActionsDisabled =
+    isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
 
   return (
     <main className="shell">
@@ -239,8 +393,8 @@ function App() {
       <section className="composer">
         <div className="section-title">Provider settings</div>
         <p className="helper">
-          OpenAI testing preset: `https://api.openai.com/v1/responses` with a model like
-          `gpt-5.4-mini` or any model ID you can access.
+          Provider metadata stays in PilotBell storage. API keys are saved separately in the
+          OS credential store through Rust/Tauri.
         </p>
         <div className="grid">
           <input
@@ -274,20 +428,20 @@ function App() {
           />
         </div>
         <div className="actions">
-          <button type="button" onClick={applyOpenAIPreset}>
+          <button type="button" onClick={applyOpenAIPreset} disabled={isProviderActionsDisabled}>
             Use OpenAI preset
           </button>
-          <button type="button" onClick={addProvider}>
-            Save provider
+          <button type="button" onClick={() => void addProvider()} disabled={isProviderActionsDisabled}>
+            {isSavingProvider ? "Saving..." : "Save provider"}
           </button>
           <button
             type="button"
-            onClick={testProvider}
-            disabled={isTestingProvider || !selectedProvider}
+            onClick={() => void testProvider()}
+            disabled={isProviderActionsDisabled || isTestingProvider || !selectedProvider}
           >
             {isTestingProvider ? "Testing..." : "Test API"}
           </button>
-          <span className="status">{providers.length} provider(s) saved locally</span>
+          <span className="status">{providers.length} provider metadata record(s) saved locally</span>
         </div>
         {providerStatus ? (
           <div className={`notice notice-${providerStatus.tone}`}>{providerStatus.message}</div>
@@ -301,21 +455,27 @@ function App() {
                   type="button"
                   className={provider.id === selectedProviderId ? "provider active" : "provider"}
                   onClick={() => setSelectedProviderId(provider.id)}
+                  disabled={isProviderActionsDisabled}
                 >
                   {provider.name} / {provider.model}
                 </button>
                 <button
                   type="button"
                   className="danger"
-                  onClick={() => removeProvider(provider.id)}
+                  onClick={() => void removeProvider(provider.id)}
+                  disabled={isProviderActionsDisabled}
                 >
-                  Remove
+                  {removingProviderId === provider.id ? "Removing..." : "Remove"}
                 </button>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="empty">Save a provider, select it, then test the API.</p>
+          <p className="empty">
+            {isMigratingProviders
+              ? "Migrating saved providers into the OS credential store..."
+              : "Save a provider, select it, then test the API."}
+          </p>
         )}
       </section>
 
@@ -340,7 +500,15 @@ function App() {
               ? `${selectedProvider.name} / ${selectedProvider.model}`
               : "Select provider"}
           </span>
-          <button type="submit" disabled={isSending || !selectedProvider || !prompt.trim()}>
+          <button
+            type="submit"
+            disabled={
+              isSending ||
+              isMigratingProviders ||
+              !selectedProvider ||
+              !prompt.trim()
+            }
+          >
             {isSending ? "Sending..." : "Send"}
           </button>
         </div>
