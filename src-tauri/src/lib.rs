@@ -1,6 +1,7 @@
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::time::Duration;
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -20,7 +21,27 @@ struct ProviderConfig {
 
 #[derive(Deserialize)]
 struct ResponseEnvelope {
-    output_text: Option<String>,
+    output: Option<Vec<ResponseItem>>,
+    error: Option<ResponseError>,
+}
+
+#[derive(Deserialize)]
+struct ResponseItem {
+    #[serde(rename = "type")]
+    item_type: String,
+    content: Option<Vec<ResponseContent>>,
+}
+
+#[derive(Deserialize)]
+struct ResponseContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ResponseError {
+    message: Option<String>,
 }
 
 fn validate_provider(provider: &ProviderConfig) -> Result<(), String> {
@@ -39,10 +60,48 @@ fn validate_provider(provider: &ProviderConfig) -> Result<(), String> {
     Ok(())
 }
 
-async fn call_provider(prompt: &str, provider: ProviderConfig) -> Result<AssistantReply, String> {
-    let payload = json!({"model": provider.model, "input": prompt});
+fn extract_output_text(parsed: &ResponseEnvelope) -> Option<String> {
+    let mut text_chunks = Vec::new();
 
-    let response = reqwest::Client::new()
+    for item in parsed.output.as_ref().into_iter().flatten() {
+        if item.item_type != "message" {
+            continue;
+        }
+
+        for content in item.content.as_ref().into_iter().flatten() {
+            if content.content_type == "output_text" {
+                if let Some(text) = content.text.as_ref() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        text_chunks.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if text_chunks.is_empty() {
+        None
+    } else {
+        Some(text_chunks.join("\n\n"))
+    }
+}
+
+async fn call_provider(prompt: &str, provider: ProviderConfig) -> Result<AssistantReply, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("Prompt is empty.".into());
+    }
+
+    let payload = json!({
+        "model": provider.model,
+        "input": prompt,
+    });
+
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("Failed to create HTTP client: {error}"))?
         .post(&provider.endpoint)
         .header(CONTENT_TYPE, "application/json")
         .header(AUTHORIZATION, format!("Bearer {}", provider.api_key))
@@ -57,17 +116,18 @@ async fn call_provider(prompt: &str, provider: ProviderConfig) -> Result<Assista
         .await
         .map_err(|error| format!("Failed to read response: {error}"))?;
 
-    if !status.is_success() {
-        return Err(format!("Provider error ({status}): {raw}"));
-    }
-
     let parsed: ResponseEnvelope =
         serde_json::from_str(&raw).map_err(|_| format!("Unexpected provider response: {raw}"))?;
 
-    let content = parsed
-        .output_text
-        .filter(|text| !text.trim().is_empty())
-        .ok_or_else(|| format!("No output_text in provider response: {raw}"))?;
+    if !status.is_success() {
+        if let Some(message) = parsed.error.and_then(|error| error.message) {
+            return Err(format!("Provider error ({status}): {message}"));
+        }
+        return Err(format!("Provider error ({status}): {raw}"));
+    }
+
+    let content = extract_output_text(&parsed)
+        .ok_or_else(|| format!("No output text found in provider response: {raw}"))?;
 
     Ok(AssistantReply {
         content,
@@ -79,19 +139,21 @@ async fn call_provider(prompt: &str, provider: ProviderConfig) -> Result<Assista
 #[tauri::command]
 async fn test_provider(provider: ProviderConfig) -> Result<String, String> {
     validate_provider(&provider)?;
-    call_provider("Reply exactly with: PilotBell provider test OK", provider).await?;
-    Ok("Provider test succeeded. You can now send prompts.".into())
+    call_provider(
+        "Reply exactly with: PilotBell provider test OK",
+        provider.clone(),
+    )
+    .await?;
+    Ok(format!(
+        "Provider test succeeded for {} / {}.",
+        provider.name, provider.model
+    ))
 }
 
 #[tauri::command]
 async fn handle_prompt(prompt: String, provider: ProviderConfig) -> Result<AssistantReply, String> {
-    let prompt = prompt.trim();
-    if prompt.is_empty() {
-        return Err("Prompt is empty.".into());
-    }
-
     validate_provider(&provider)?;
-    call_provider(prompt, provider).await
+    call_provider(&prompt, provider).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

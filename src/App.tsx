@@ -27,10 +27,10 @@ function App() {
   const [providers, setProviders] = useState<ProviderConfig[]>(() => loadProviders());
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({
-    name: "",
+    name: "OpenAI",
     endpoint: "https://api.openai.com/v1/responses",
     apiKey: "",
-    model: "gpt-4.1-mini",
+    model: "gpt-5.4-mini",
   });
 
   const selectedProvider = useMemo(
@@ -41,6 +41,15 @@ function App() {
   function persistProviders(next: ProviderConfig[]) {
     setProviders(next);
     saveProviders(next);
+  }
+
+  function applyOpenAIPreset() {
+    setProviderDraft((current) => ({
+      ...current,
+      name: current.name.trim() || "OpenAI",
+      endpoint: "https://api.openai.com/v1/responses",
+      model: current.model.trim() || "gpt-5.4-mini",
+    }));
   }
 
   function addProvider() {
@@ -54,14 +63,21 @@ function App() {
     const next = [...providers, nextProvider];
     persistProviders(next);
     setSelectedProviderId(nextProvider.id);
-    setProviderDraft({ ...providerDraft, apiKey: "" });
+    setProviderDraft({
+      ...normalized,
+      apiKey: "",
+    });
+    setProviderHealth("");
     setError("");
   }
 
   function removeProvider(id: string) {
     const next = providers.filter((provider) => provider.id !== id);
     persistProviders(next);
-    if (selectedProviderId === id) setSelectedProviderId("");
+    if (selectedProviderId === id) {
+      setSelectedProviderId("");
+      setProviderHealth("");
+    }
   }
 
   async function testProvider() {
@@ -92,9 +108,14 @@ function App() {
       setError("Select a provider before sending.");
       return;
     }
+    if (!prompt.trim()) {
+      setError("Prompt is empty.");
+      return;
+    }
 
     setIsSending(true);
     setError("");
+
     try {
       const result = await invoke<AssistantReply>("handle_prompt", {
         prompt,
@@ -111,30 +132,132 @@ function App() {
 
   return (
     <main className="shell">
-      <header className="topbar"><div><p className="eyebrow">AI Command Palette</p><h1>PilotBell</h1></div><span className="phase">Build Start</span></header>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">AI Command Palette</p>
+          <h1>PilotBell</h1>
+        </div>
+        <span className="phase">Provider MVP</span>
+      </header>
+
       <section className="composer">
-        <div className="section-title">Provider settings (open registration)</div>
-        <p className="helper">この画面から誰でも API を登録できます。次フェーズで権限管理/鍵保護を追加予定。</p>
+        <div className="section-title">Provider settings</div>
+        <p className="helper">
+          OpenAI testing preset: `https://api.openai.com/v1/responses` with a model like
+          `gpt-5.4-mini` or any model ID you can access.
+        </p>
         <div className="grid">
-          <input value={providerDraft.name} onChange={(event) => setProviderDraft({ ...providerDraft, name: event.currentTarget.value })} placeholder="Display name" />
-          <input value={providerDraft.model} onChange={(event) => setProviderDraft({ ...providerDraft, model: event.currentTarget.value })} placeholder="Model (e.g. gpt-4.1-mini)" />
-          <input value={providerDraft.endpoint} onChange={(event) => setProviderDraft({ ...providerDraft, endpoint: event.currentTarget.value })} placeholder="Endpoint URL" />
-          <input type="password" value={providerDraft.apiKey} onChange={(event) => setProviderDraft({ ...providerDraft, apiKey: event.currentTarget.value })} placeholder="API key" />
+          <input
+            value={providerDraft.name}
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, name: event.currentTarget.value })
+            }
+            placeholder="Display name"
+          />
+          <input
+            value={providerDraft.model}
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, model: event.currentTarget.value })
+            }
+            placeholder="Model (e.g. gpt-5.4-mini)"
+          />
+          <input
+            value={providerDraft.endpoint}
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, endpoint: event.currentTarget.value })
+            }
+            placeholder="Endpoint URL"
+          />
+          <input
+            type="password"
+            value={providerDraft.apiKey}
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, apiKey: event.currentTarget.value })
+            }
+            placeholder="API key"
+          />
         </div>
         <div className="actions">
-          <button type="button" onClick={addProvider}>Register API</button>
-          <button type="button" onClick={testProvider} disabled={isTestingProvider || !selectedProvider}>{isTestingProvider ? "Testing..." : "Test API"}</button>
+          <button type="button" onClick={applyOpenAIPreset}>
+            Use OpenAI preset
+          </button>
+          <button type="button" onClick={addProvider}>
+            Save provider
+          </button>
+          <button
+            type="button"
+            onClick={testProvider}
+            disabled={isTestingProvider || !selectedProvider}
+          >
+            {isTestingProvider ? "Testing..." : "Test API"}
+          </button>
           <span className="status">{providers.length} provider(s) saved locally</span>
         </div>
         {providerHealth ? <p className="helper">{providerHealth}</p> : null}
-        {providers.length > 0 ? <ul className="provider-list">{providers.map((provider) => <li key={provider.id}><button type="button" className={provider.id === selectedProviderId ? "provider active" : "provider"} onClick={() => setSelectedProviderId(provider.id)}>{provider.name} / {provider.model}</button><button type="button" className="danger" onClick={() => removeProvider(provider.id)}>Remove</button></li>)}</ul> : null}
+
+        {providers.length > 0 ? (
+          <ul className="provider-list">
+            {providers.map((provider) => (
+              <li key={provider.id}>
+                <button
+                  type="button"
+                  className={provider.id === selectedProviderId ? "provider active" : "provider"}
+                  onClick={() => setSelectedProviderId(provider.id)}
+                >
+                  {provider.name} / {provider.model}
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => removeProvider(provider.id)}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="empty">Save a provider, select it, then test the API.</p>
+        )}
       </section>
-      <form className="composer" onSubmit={(event) => { event.preventDefault(); sendPrompt(); }}>
+
+      <form
+        className="composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void sendPrompt();
+        }}
+      >
         <label htmlFor="prompt">Prompt</label>
-        <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.currentTarget.value)} placeholder="Ask PilotBell..." rows={6} />
-        <div className="actions"><span className="status">{selectedProvider ? `${selectedProvider.name} / ${selectedProvider.model}` : "Select provider"}</span><button type="submit" disabled={isSending}>{isSending ? "Sending..." : "Send"}</button></div>
+        <textarea
+          id="prompt"
+          value={prompt}
+          onChange={(event) => setPrompt(event.currentTarget.value)}
+          placeholder="Ask PilotBell..."
+          rows={6}
+        />
+        <div className="actions">
+          <span className="status">
+            {selectedProvider
+              ? `${selectedProvider.name} / ${selectedProvider.model}`
+              : "Select provider"}
+          </span>
+          <button type="submit" disabled={isSending || !selectedProvider || !prompt.trim()}>
+            {isSending ? "Sending..." : "Send"}
+          </button>
+        </div>
       </form>
-      <section className="response" aria-live="polite"><div className="section-title">Response</div>{error ? <pre className="error">{error}</pre> : reply ? <pre>{reply.content}</pre> : <p className="empty">Waiting for a prompt.</p>}</section>
+
+      <section className="response" aria-live="polite">
+        <div className="section-title">Response</div>
+        {error ? (
+          <pre className="error">{error}</pre>
+        ) : reply ? (
+          <pre>{reply.content}</pre>
+        ) : (
+          <p className="empty">Waiting for a prompt.</p>
+        )}
+      </section>
     </main>
   );
 }
