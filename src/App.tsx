@@ -16,13 +16,66 @@ type AssistantReply = {
   model: string;
 };
 
+type ProviderErrorKind =
+  | "validation"
+  | "timeout"
+  | "network"
+  | "provider"
+  | "response_format"
+  | "internal";
+
+type ProviderCommandError = {
+  kind: ProviderErrorKind;
+  message: string;
+  statusCode?: number | null;
+  retryable: boolean;
+  details?: string | null;
+};
+
+type ProviderHealth = {
+  message: string;
+};
+
+type CommandResult<T> =
+  | {
+      status: "success";
+      data: T;
+    }
+  | {
+      status: "error";
+      error: ProviderCommandError;
+    };
+
+type StatusTone = "neutral" | "success" | "warning" | "error";
+
+type InlineStatus = {
+  tone: StatusTone;
+  message: string;
+};
+
+function toneForProviderError(error: ProviderCommandError): StatusTone {
+  if (error.kind === "validation" || error.kind === "response_format") {
+    return "warning";
+  }
+
+  return "error";
+}
+
+function fallbackCommandError(message: string): ProviderCommandError {
+  return {
+    kind: "internal",
+    message,
+    retryable: false,
+  };
+}
+
 function App() {
   const [prompt, setPrompt] = useState("");
   const [reply, setReply] = useState<AssistantReply | null>(null);
-  const [error, setError] = useState("");
+  const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
-  const [providerHealth, setProviderHealth] = useState("");
+  const [providerStatus, setProviderStatus] = useState<InlineStatus | null>(null);
 
   const [providers, setProviders] = useState<ProviderConfig[]>(() => loadProviders());
   const [selectedProviderId, setSelectedProviderId] = useState("");
@@ -55,7 +108,10 @@ function App() {
   function addProvider() {
     const normalized = normalizeProviderDraft(providerDraft);
     if (!isProviderDraftValid(normalized)) {
-      setError("Provider registration failed: all fields are required.");
+      setProviderStatus({
+        tone: "warning",
+        message: "Provider registration failed: all fields are required.",
+      });
       return;
     }
 
@@ -67,8 +123,10 @@ function App() {
       ...normalized,
       apiKey: "",
     });
-    setProviderHealth("");
-    setError("");
+    setProviderStatus({
+      tone: "success",
+      message: `Saved ${nextProvider.name}. Select it and run Test API before sending prompts.`,
+    });
   }
 
   function removeProvider(id: string) {
@@ -76,28 +134,48 @@ function App() {
     persistProviders(next);
     if (selectedProviderId === id) {
       setSelectedProviderId("");
-      setProviderHealth("");
+      setProviderStatus({
+        tone: "neutral",
+        message: "Selected provider removed. Save or select another provider.",
+      });
     }
   }
 
   async function testProvider() {
     if (!selectedProvider) {
-      setError("Select a provider before testing.");
+      setProviderStatus({
+        tone: "warning",
+        message: "Select a provider before testing.",
+      });
       return;
     }
 
     setIsTestingProvider(true);
-    setError("");
-    setProviderHealth("");
+    setProviderStatus({
+      tone: "neutral",
+      message: `Testing ${selectedProvider.name}...`,
+    });
 
     try {
-      const result = await invoke<string>("test_provider", {
+      const result = await invoke<CommandResult<ProviderHealth>>("test_provider", {
         provider: selectedProvider,
       });
-      setProviderHealth(result);
+      if (result.status === "success") {
+        setProviderStatus({
+          tone: "success",
+          message: result.data.message,
+        });
+      } else {
+        setProviderStatus({
+          tone: toneForProviderError(result.error),
+          message: result.error.message,
+        });
+      }
     } catch (err) {
-      setProviderHealth("");
-      setError(err instanceof Error ? err.message : String(err));
+      setProviderStatus({
+        tone: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setIsTestingProvider(false);
     }
@@ -105,26 +183,44 @@ function App() {
 
   async function sendPrompt() {
     if (!selectedProvider) {
-      setError("Select a provider before sending.");
+      setReplyError(fallbackCommandError("Select a provider before sending."));
       return;
     }
     if (!prompt.trim()) {
-      setError("Prompt is empty.");
+      setReplyError(fallbackCommandError("Prompt is empty."));
       return;
     }
 
     setIsSending(true);
-    setError("");
+    setReplyError(null);
 
     try {
-      const result = await invoke<AssistantReply>("handle_prompt", {
+      const result = await invoke<CommandResult<AssistantReply>>("handle_prompt", {
         prompt,
         provider: selectedProvider,
       });
-      setReply(result);
+      if (result.status === "success") {
+        setReply(result.data);
+        setReplyError(null);
+        setProviderStatus({
+          tone: "success",
+          message: `Last response came from ${result.data.provider} / ${result.data.model}.`,
+        });
+      } else {
+        setReply(null);
+        setReplyError(result.error);
+        setProviderStatus({
+          tone: toneForProviderError(result.error),
+          message: result.error.retryable
+            ? "Provider request failed. Retry is available after you adjust settings or credentials."
+            : "Provider request failed. Review the provider status details before retrying.",
+        });
+      }
     } catch (err) {
       setReply(null);
-      setError(err instanceof Error ? err.message : String(err));
+      setReplyError(
+        fallbackCommandError(err instanceof Error ? err.message : String(err)),
+      );
     } finally {
       setIsSending(false);
     }
@@ -193,7 +289,9 @@ function App() {
           </button>
           <span className="status">{providers.length} provider(s) saved locally</span>
         </div>
-        {providerHealth ? <p className="helper">{providerHealth}</p> : null}
+        {providerStatus ? (
+          <div className={`notice notice-${providerStatus.tone}`}>{providerStatus.message}</div>
+        ) : null}
 
         {providers.length > 0 ? (
           <ul className="provider-list">
@@ -250,8 +348,16 @@ function App() {
 
       <section className="response" aria-live="polite">
         <div className="section-title">Response</div>
-        {error ? (
-          <pre className="error">{error}</pre>
+        {replyError ? (
+          <div className="response-stack">
+            <pre className="error">{replyError.message}</pre>
+            {replyError.details ? <pre className="detail">{replyError.details}</pre> : null}
+            <p className="helper">
+              Error kind: {replyError.kind}
+              {replyError.statusCode ? ` / HTTP ${replyError.statusCode}` : ""}
+              {replyError.retryable ? " / retryable" : ""}
+            </p>
+          </div>
         ) : reply ? (
           <pre>{reply.content}</pre>
         ) : (
