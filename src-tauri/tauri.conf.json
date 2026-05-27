@@ -13,8 +13,9 @@
     "windows": [
       {
         "title": "PilotBell",
-        "width": 720,
-        "height": 520,
+        "center": true,
+        "width": 680,
+        "height": 460,
         "minWidth": 520,
         "minHeight": 420
       }

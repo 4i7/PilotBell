@@ -70,6 +70,7 @@ enum ProviderKind {
     OpenAiResponses,
 }
 
+#[derive(Debug)]
 struct ProviderAdapter {
     healthcheck_prompt: &'static str,
     validate: fn(&ProviderConfig) -> Result<(), ProviderCommandError>,
@@ -89,7 +90,7 @@ struct AppShellStateSnapshot {
     message: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ProviderErrorKind {
     Validation,
@@ -101,7 +102,7 @@ enum ProviderErrorKind {
     Internal,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderCommandError {
     kind: ProviderErrorKind,
@@ -634,8 +635,6 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler({
-                    let primary_shortcut = primary_shortcut.clone();
-                    let fallback_shortcut = fallback_shortcut.clone();
                     move |app, shortcut, event| {
                         if event.state() != ShortcutState::Pressed {
                             return;
@@ -652,7 +651,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let state = app.state::<AppShellState>();
-            let registration_result = app.global_shortcut().register(primary_shortcut.clone());
+            let registration_result = app.global_shortcut().register(primary_shortcut);
 
             match registration_result {
                 Ok(()) => update_shell_state(&state, |snapshot| {
@@ -664,7 +663,7 @@ pub fn run() {
                 }),
                 Err(primary_error) => {
                     if let Err(fallback_error) =
-                        app.global_shortcut().register(fallback_shortcut.clone())
+                        app.global_shortcut().register(fallback_shortcut)
                     {
                         update_shell_state(&state, |snapshot| {
                             snapshot.active_shortcut = PRIMARY_SHORTCUT_LABEL.into();
@@ -699,4 +698,97 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_provider() -> ProviderConfig {
+        ProviderConfig {
+            id: "provider-1".into(),
+            kind: OPENAI_RESPONSES_KIND.into(),
+            name: "OpenAI".into(),
+            endpoint: "https://api.openai.com/v1/responses".into(),
+            model: "gpt-5.4-mini".into(),
+            has_secret: true,
+        }
+    }
+
+    #[test]
+    fn validate_provider_accepts_openai_responses_shape() {
+        assert!(validate_provider(&sample_provider()).is_ok());
+    }
+
+    #[test]
+    fn validate_provider_rejects_missing_secret() {
+        let mut provider = sample_provider();
+        provider.has_secret = false;
+
+        let error = validate_provider(&provider).expect_err("provider without secret should fail");
+        assert!(matches!(error.kind, ProviderErrorKind::Validation));
+        assert!(error.message.contains("Provider secret is missing"));
+    }
+
+    #[test]
+    fn validate_provider_rejects_non_https_endpoint() {
+        let mut provider = sample_provider();
+        provider.endpoint = "http://localhost:11434/api/generate".into();
+
+        let error = validate_provider(&provider).expect_err("http endpoint should fail");
+        assert!(matches!(error.kind, ProviderErrorKind::Validation));
+        assert!(error.message.contains("https://"));
+    }
+
+    #[test]
+    fn build_openai_payload_uses_model_and_input() {
+        let provider = sample_provider();
+        let payload = build_openai_responses_payload(&provider, "hello");
+
+        assert_eq!(payload["model"], "gpt-5.4-mini");
+        assert_eq!(payload["input"], "hello");
+    }
+
+    #[test]
+    fn parse_openai_response_extracts_output_text() {
+        let raw = r#"{
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        { "type": "output_text", "text": "first" },
+                        { "type": "output_text", "text": "second" }
+                    ]
+                }
+            ]
+        }"#;
+
+        let parsed: ResponseEnvelope = serde_json::from_str(raw).expect("response should parse");
+        let text =
+            parse_openai_responses_output(raw, parsed).expect("output text should be extracted");
+
+        assert_eq!(text, "first\n\nsecond");
+    }
+
+    #[test]
+    fn parse_openai_response_returns_structured_error_when_output_missing() {
+        let raw = r#"{
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        { "type": "input_text", "text": "ignored" }
+                    ]
+                }
+            ]
+        }"#;
+
+        let parsed: ResponseEnvelope = serde_json::from_str(raw).expect("response should parse");
+        let error = parse_openai_responses_output(raw, parsed)
+            .expect_err("missing output_text should return a structured error");
+
+        assert!(matches!(error.kind, ProviderErrorKind::ResponseFormat));
+        assert!(error.message.contains("No output text"));
+        assert!(error.details.is_some());
+    }
 }

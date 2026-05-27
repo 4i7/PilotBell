@@ -71,6 +71,16 @@ type AppShellState = {
 };
 
 const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
+const BROWSER_PREVIEW_MESSAGE =
+  "Browser preview mode detected. PilotBell desktop features require `npm run tauri dev` or a packaged Tauri build.";
+
+function hasTauriRuntime() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
+}
 
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
@@ -129,6 +139,7 @@ function App() {
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
+  const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   function persistProviders(next: ProviderConfig[]) {
@@ -156,6 +167,15 @@ function App() {
   }
 
   useEffect(() => {
+    if (!isTauriRuntime) {
+      setProviderStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      setIsMigratingProviders(false);
+      return;
+    }
+
     let cancelled = false;
 
     async function loadShellState() {
@@ -192,9 +212,13 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isTauriRuntime]);
 
   useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
     const currentWindow = getCurrentWindow();
     let unlistenWindowFocus: (() => void) | undefined;
     let removeEscapeListener: (() => void) | undefined;
@@ -225,9 +249,13 @@ function App() {
       unlistenWindowFocus?.();
       removeEscapeListener?.();
     };
-  }, [shellState]);
+  }, [isTauriRuntime, shellState]);
 
   useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
     if (initialProviderState.legacyProviders.length === 0) {
       return;
     }
@@ -295,7 +323,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [initialProviderState.legacyProviders]);
+  }, [initialProviderState.legacyProviders, isTauriRuntime]);
 
   function applyOpenAIPreset() {
     setProviderDraft((current) => ({
@@ -308,6 +336,14 @@ function App() {
   }
 
   async function addProvider() {
+    if (!isTauriRuntime) {
+      setProviderStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      return;
+    }
+
     const normalized = normalizeProviderDraft(providerDraft);
     if (!isProviderDraftValid(normalized)) {
       setProviderStatus({
@@ -364,6 +400,14 @@ function App() {
   }
 
   async function removeProvider(id: string) {
+    if (!isTauriRuntime) {
+      setProviderStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      return;
+    }
+
     setRemovingProviderId(id);
 
     try {
@@ -396,6 +440,14 @@ function App() {
   }
 
   async function testProvider() {
+    if (!isTauriRuntime) {
+      setProviderStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      return;
+    }
+
     if (!selectedProvider) {
       setProviderStatus({
         tone: "warning",
@@ -436,6 +488,11 @@ function App() {
   }
 
   async function sendPrompt() {
+    if (!isTauriRuntime) {
+      setReplyError(localValidationError(BROWSER_PREVIEW_MESSAGE));
+      return;
+    }
+
     if (!selectedProvider) {
       setReplyError(localValidationError("Select a provider before sending."));
       return;
@@ -556,13 +613,22 @@ function App() {
           <button type="button" onClick={applyOpenAIPreset} disabled={isProviderActionsDisabled}>
             Use OpenAI preset
           </button>
-          <button type="button" onClick={() => void addProvider()} disabled={isProviderActionsDisabled}>
+          <button
+            type="button"
+            onClick={() => void addProvider()}
+            disabled={!isTauriRuntime || isProviderActionsDisabled}
+          >
             {isSavingProvider ? "Saving..." : "Save provider"}
           </button>
           <button
             type="button"
             onClick={() => void testProvider()}
-            disabled={isProviderActionsDisabled || isTestingProvider || !selectedProvider}
+            disabled={
+              !isTauriRuntime ||
+              isProviderActionsDisabled ||
+              isTestingProvider ||
+              !selectedProvider
+            }
           >
             {isTestingProvider ? "Testing..." : "Test API"}
           </button>
@@ -580,7 +646,7 @@ function App() {
                   type="button"
                   className={provider.id === selectedProviderId ? "provider active" : "provider"}
                   onClick={() => setSelectedProviderId(provider.id)}
-                  disabled={isProviderActionsDisabled}
+                  disabled={!isTauriRuntime || isProviderActionsDisabled}
                 >
                   {provider.name} / {provider.model} / {providerKindLabel(provider.kind)}
                 </button>
@@ -588,7 +654,7 @@ function App() {
                   type="button"
                   className="danger"
                   onClick={() => void removeProvider(provider.id)}
-                  disabled={isProviderActionsDisabled}
+                  disabled={!isTauriRuntime || isProviderActionsDisabled}
                 >
                   {removingProviderId === provider.id ? "Removing..." : "Remove"}
                 </button>
@@ -597,9 +663,11 @@ function App() {
           </ul>
         ) : (
           <p className="empty">
-            {isMigratingProviders
-              ? "Migrating saved providers into the OS credential store..."
-              : "Save a provider, select it, then test the API."}
+              {!isTauriRuntime
+                ? "Open PilotBell through Tauri to save and test providers."
+                : isMigratingProviders
+                ? "Migrating saved providers into the OS credential store..."
+                : "Save a provider, select it, then test the API."}
           </p>
         )}
       </section>
@@ -630,6 +698,7 @@ function App() {
             type="submit"
             disabled={
               isSending ||
+              !isTauriRuntime ||
               isMigratingProviders ||
               !selectedProvider ||
               !prompt.trim()
