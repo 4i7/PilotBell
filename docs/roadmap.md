@@ -1,93 +1,68 @@
-# PilotBell Roadmap
+# PilotBell Roadmap (Execution Plan)
 
-## Product Direction
+## 目的
+主要機能（実際の AI 呼び出し、プロバイダ管理、履歴、ショートカット、ローカル知識連携）を段階的に実動作させる。
 
-PilotBell is a fast desktop AI entry point for API models, local LLMs, Obsidian vaults, agent skills, and local knowledge bases.
+## 実動作までに必要な機能洗い出し
 
-React + TypeScript was selected for the frontend because Phase 2 and Phase 3 will add more client state: history, provider settings, shortcut status, vault search results, and skill command metadata.
+### 1) Provider / API 実行基盤
+- Provider 登録・選択・削除
+- Provider 接続テスト
+- Prompt 実行（成功/失敗ハンドリング）
+- Provider ごとのタイムアウト、再試行、エラー分類
 
-## Phase 1 - MVP
+### 2) セキュリティ
+- API Key の平文 localStorage 保存を廃止
+- Tauri 側 secure storage（OS keychain or encrypted store）へ移行
+- endpoint allowlist/https 強制
 
-Goal: prove the Tauri shell, UI, and Rust command bridge.
+### 3) UX
+- コマンド履歴保存・再実行
+- 送信キャンセル
+- Provider/Model 状態表示
+- ショートカットで表示トグル
 
-Implemented:
+### 4) 拡張
+- OpenAI 互換以外の adapter 層
+- ローカル LLM（Ollama）
+- ローカル KB / Obsidian 検索
 
-- Tauri v2 app scaffold
-- React + TypeScript frontend
-- Prompt textarea
-- Send button
-- Response panel
-- Rust command: `handle_prompt`
-- Mock assistant provider
-- Windows release build and installer generation
+## 設計方針（関数・プログラム設計）
 
-Out of scope:
+### Frontend
+- `domain/provider.ts` : Provider の型・検証・正規化
+- `lib/providerStore.ts` : 永続化 I/O
+- `App.tsx` : UI 合成 + invoke 呼び出し
 
-- Global shortcut
-- Frameless overlay
-- Real API model calls
-- Local LLM integration
-- Obsidian/KB indexing
-- Persistent history
+### Backend (Rust)
+- `validate_provider` : 入力検証（必須項目 / https）
+- `call_provider` : HTTP 呼び出し共通処理
+- `test_provider` : 接続確認 command
+- `handle_prompt` : 実行 command
 
-## Phase 2 - Command Palette UX
+## 開発ロードマップ
 
-Goal: make PilotBell feel instant and OS-native.
+### Phase A（着手済み）
+- [x] Provider 登録 UI
+- [x] Prompt の実 API 呼び出し
+- [x] Provider 接続テスト command
+- [x] Provider 検証関数の共通化
 
-Planned:
+### Phase B
+- [ ] API key secure storage
+- [ ] timeout/retry 設定
+- [ ] structured error model
 
-- Add Tauri global shortcut plugin
-- Toggle window with `Alt+Space` or a configurable fallback
-- Add tray icon
-- Add compact spotlight window mode
-- Persist window position and user preferences
-- Add command history
-- Add provider settings UI
+### Phase C
+- [ ] global shortcut + compact window
+- [ ] history + rerun + copy
 
-Implementation notes:
+### Phase D
+- [ ] provider adapter architecture
+- [ ] local KB integration
 
-- Keep Phase 1 `handle_prompt` as the stable command boundary.
-- Introduce a `Provider` trait on the Rust side before adding real model calls.
-- Store API keys in the OS keychain or an encrypted Tauri store plugin, not in plaintext config files.
 
-## Phase 3 - Local Knowledge Integration
-
-Goal: turn PilotBell from a chat launcher into a local context router.
-
-Planned:
-
-- Obsidian vault path configuration
-- Knowledge-distiller search command
-- Local KB result cards
-- Ollama / llama.cpp provider adapter
-- Skill registry and skill command execution
-- Prompt pattern library integration
-- Model roster and quick provider switching
-
-Design constraints:
-
-- Local-first by default
-- BYOK for remote APIs
-- Clear provider and context indicators in every response
-- No hidden upload of local vault content
-
-## Phase 1 Setup Commands
-
-From a fresh clone:
-
-```powershell
-git clone https://github.com/4i7/PilotBell.git
-cd PilotBell
-npm install
-npm run tauri dev
-```
-
-Current verification commands:
-
-```powershell
-npm run build
-cd src-tauri
-cargo check
-cd ..
-npm run tauri build
-```
+## 開発環境ポリシー
+- 現在の主対象は Windows 11。
+- Rust/Tauri の正規チェックは Windows ホスト（stable-msvc）で実施。
+- Linux 依存エラーは、Windows 専用開発フェーズでは非ブロッカー扱い。
