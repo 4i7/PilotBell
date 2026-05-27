@@ -3,6 +3,9 @@ name = "pilotbell"
 version = "0.1.0"
 description = "PilotBell desktop AI command palette"
 authors = ["4i7"]
+license = "MIT"
+homepage = "https://github.com/4i7/PilotBell"
+repository = "https://github.com/4i7/PilotBell"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
