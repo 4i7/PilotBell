@@ -1,8 +1,10 @@
 # PilotBell
 
-PilotBell is a lightweight Dreadnought desktop AI command palette built with Tauri v2, Rust, React, and TypeScript.
+PilotBell is a lightweight desktop AI command palette built with Tauri v2, Rust, React, and TypeScript.
 
-## Phase 1 Scope
+The project is currently in an early MVP stage. The first milestone focuses on a clean desktop shell, a prompt input, and a Rust command bridge that can later be connected to real AI providers and local knowledge sources.
+
+## Current Scope
 
 - Clean desktop window
 - Prompt textarea
@@ -10,13 +12,21 @@ PilotBell is a lightweight Dreadnought desktop AI command palette built with Tau
 - Response display area
 - Rust backend command returning a mock assistant response
 
+Planned next steps include a global shortcut, a compact spotlight-style window, provider adapters for remote and local models, and optional local knowledge-base integrations.
+
 ## Setup
 
-From the Dreadnought workspace:
+Clone the repository and install dependencies:
 
 ```powershell
-cd C:\Users\4i7\Claude\Projects\Dreadnought\apps\pilotbell
+git clone https://github.com/4i7/PilotBell.git
+cd PilotBell
 npm install
+```
+
+Run the desktop app in development mode:
+
+```powershell
 npm run tauri dev
 ```
 

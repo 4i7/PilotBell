@@ -33,7 +33,7 @@ function App() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Dreadnought</p>
+          <p className="eyebrow">AI Command Palette</p>
           <h1>PilotBell</h1>
         </div>
         <span className="phase">Phase 1</span>

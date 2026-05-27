@@ -2,7 +2,7 @@
 
 ## Product Direction
 
-PilotBell is the Dreadnought command palette: a fast desktop AI entry point for API models, local LLMs, Obsidian vaults, Hermes/Codex skills, and local knowledge bases.
+PilotBell is a fast desktop AI entry point for API models, local LLMs, Obsidian vaults, agent skills, and local knowledge bases.
 
 React + TypeScript was selected for the frontend because Phase 2 and Phase 3 will add more client state: history, provider settings, shortcut status, vault search results, and skill command metadata.
 
@@ -73,12 +73,11 @@ Design constraints:
 
 ## Phase 1 Setup Commands
 
-The app has already been scaffolded. To reproduce from a clean workspace:
+From a fresh clone:
 
 ```powershell
-cd C:\Users\4i7\Claude\Projects\Dreadnought
-npm create tauri-app@latest apps/pilotbell -- --template react-ts --manager npm --identifier com.dreadnought.pilotbell --tauri-version 2 --yes
-cd apps\pilotbell
+git clone https://github.com/4i7/PilotBell.git
+cd PilotBell
 npm install
 npm run tauri dev
 ```
@@ -86,7 +85,6 @@ npm run tauri dev
 Current verification commands:
 
 ```powershell
-cd C:\Users\4i7\Claude\Projects\Dreadnought\apps\pilotbell
 npm run build
 cd src-tauri
 cargo check
