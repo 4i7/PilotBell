@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   DEFAULT_PROVIDER_KIND,
   type ProviderConfig,
@@ -61,6 +63,15 @@ type InlineStatus = {
   message: string;
 };
 
+type AppShellState = {
+  activeShortcut: string;
+  usedFallbackShortcut: boolean;
+  globalShortcutRegistered: boolean;
+  message?: string | null;
+};
+
+const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
+
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
 ];
@@ -94,6 +105,7 @@ function App() {
   const [prompt, setPrompt] = useState("");
   const [reply, setReply] = useState<AssistantReply | null>(null);
   const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
+  const [shellState, setShellState] = useState<AppShellState | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
   const [isSavingProvider, setIsSavingProvider] = useState(false);
@@ -117,6 +129,7 @@ function App() {
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   function persistProviders(next: ProviderConfig[]) {
     setProviders(next);
@@ -137,6 +150,82 @@ function App() {
       providerId,
     });
   }
+
+  async function hidePaletteWindow() {
+    return invoke("hide_palette_window");
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadShellState() {
+      const nextShellState = await invoke<AppShellState>("get_app_shell_state");
+      if (cancelled) {
+        return;
+      }
+
+      setShellState(nextShellState);
+
+      if (nextShellState.message) {
+        setProviderStatus({
+          tone:
+            nextShellState.globalShortcutRegistered && !nextShellState.usedFallbackShortcut
+              ? "success"
+              : nextShellState.globalShortcutRegistered
+                ? "warning"
+                : "error",
+          message: nextShellState.message,
+        });
+      }
+
+      const currentWindow = getCurrentWindow();
+      await currentWindow.setSkipTaskbar(nextShellState.globalShortcutRegistered);
+      await currentWindow.setAlwaysOnTop(nextShellState.globalShortcutRegistered);
+      if (nextShellState.globalShortcutRegistered) {
+        await currentWindow.setFocus();
+        promptRef.current?.focus();
+      }
+    }
+
+    void loadShellState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+    let unlistenWindowFocus: (() => void) | undefined;
+    let removeEscapeListener: (() => void) | undefined;
+
+    async function bindPaletteWindowBehavior() {
+      unlistenWindowFocus = await listen(FOCUS_PROMPT_EVENT, async () => {
+        promptRef.current?.focus();
+        await currentWindow.setAlwaysOnTop(true);
+        await currentWindow.setFocus();
+      });
+
+      const handleEscape = async (keyboardEvent: KeyboardEvent) => {
+        if (keyboardEvent.key !== "Escape" || !shellState?.globalShortcutRegistered) {
+          return;
+        }
+
+        keyboardEvent.preventDefault();
+        await hidePaletteWindow();
+      };
+
+      window.addEventListener("keydown", handleEscape);
+      removeEscapeListener = () => window.removeEventListener("keydown", handleEscape);
+    }
+
+    void bindPaletteWindowBehavior();
+
+    return () => {
+      unlistenWindowFocus?.();
+      removeEscapeListener?.();
+    };
+  }, [shellState]);
 
   useEffect(() => {
     if (initialProviderState.legacyProviders.length === 0) {
@@ -400,8 +489,14 @@ function App() {
         <div>
           <p className="eyebrow">AI Command Palette</p>
           <h1>PilotBell</h1>
+          {shellState ? (
+            <p className="helper shortcut-line">
+              Shortcut: {shellState.activeShortcut}
+              {shellState.usedFallbackShortcut ? " (fallback)" : ""}
+            </p>
+          ) : null}
         </div>
-        <span className="phase">Provider MVP</span>
+        <span className="phase">Phase 2 Foundation</span>
       </header>
 
       <section className="composer">
@@ -519,6 +614,7 @@ function App() {
         <label htmlFor="prompt">Prompt</label>
         <textarea
           id="prompt"
+          ref={promptRef}
           value={prompt}
           onChange={(event) => setPrompt(event.currentTarget.value)}
           placeholder="Ask PilotBell..."

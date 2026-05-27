@@ -3,10 +3,17 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use std::sync::Mutex;
 use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const PROVIDER_SECRET_SERVICE: &str = "io.github.fouri7.pilotbell.provider";
 const OPENAI_RESPONSES_KIND: &str = "openai-responses";
+const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
+const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
+const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -68,6 +75,18 @@ struct ProviderAdapter {
     validate: fn(&ProviderConfig) -> Result<(), ProviderCommandError>,
     build_payload: fn(&ProviderConfig, &str) -> Value,
     parse_response: fn(&str, ResponseEnvelope) -> Result<String, ProviderCommandError>,
+}
+
+#[derive(Default)]
+struct AppShellState(Mutex<AppShellStateSnapshot>);
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppShellStateSnapshot {
+    active_shortcut: String,
+    used_fallback_shortcut: bool,
+    global_shortcut_registered: bool,
+    message: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -443,6 +462,71 @@ async fn call_provider(
     })
 }
 
+fn update_shell_state(
+    state: &State<'_, AppShellState>,
+    updater: impl FnOnce(&mut AppShellStateSnapshot),
+) {
+    if let Ok(mut current) = state.0.lock() {
+        updater(&mut current);
+    }
+}
+
+fn toggle_main_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window is unavailable.".to_string())?;
+    let visible = window.is_visible().map_err(|error| error.to_string())?;
+
+    if visible {
+        hide_main_window_impl(app, &window)?;
+    } else {
+        show_main_window_impl(app, &window)?;
+    }
+
+    Ok(())
+}
+
+fn hide_main_window_impl<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<(), String> {
+    let _ = app.save_window_state(StateFlags::all());
+    window
+        .set_always_on_top(false)
+        .map_err(|error| error.to_string())?;
+    window.hide().map_err(|error| error.to_string())
+}
+
+fn show_main_window_impl<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<(), String> {
+    window.show().map_err(|error| error.to_string())?;
+    window
+        .set_always_on_top(true)
+        .map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    app.emit_to("main", FOCUS_PROMPT_EVENT, ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_app_shell_state(state: State<'_, AppShellState>) -> AppShellStateSnapshot {
+    state
+        .0
+        .lock()
+        .map(|snapshot| snapshot.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn hide_palette_window(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window is unavailable.".to_string())?;
+    hide_main_window_impl(&app, &window)
+}
+
 #[tauri::command]
 async fn store_provider_secret(
     input: ProviderSecretInput,
@@ -542,11 +626,74 @@ async fn handle_prompt(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let primary_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+    let fallback_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+
     tauri::Builder::default()
+        .manage(AppShellState::default())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler({
+                    let primary_shortcut = primary_shortcut.clone();
+                    let fallback_shortcut = fallback_shortcut.clone();
+                    move |app, shortcut, event| {
+                        if event.state() != ShortcutState::Pressed {
+                            return;
+                        }
+
+                        if shortcut == &primary_shortcut || shortcut == &fallback_shortcut {
+                            let _ = toggle_main_window(app);
+                        }
+                    }
+                })
+                .build(),
+        )
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
+        .setup(move |app| {
+            let state = app.state::<AppShellState>();
+            let registration_result = app.global_shortcut().register(primary_shortcut.clone());
+
+            match registration_result {
+                Ok(()) => update_shell_state(&state, |snapshot| {
+                    snapshot.active_shortcut = PRIMARY_SHORTCUT_LABEL.into();
+                    snapshot.used_fallback_shortcut = false;
+                    snapshot.global_shortcut_registered = true;
+                    snapshot.message =
+                        Some("Global shortcut ready. Use Alt+Space to toggle PilotBell.".into());
+                }),
+                Err(primary_error) => {
+                    if let Err(fallback_error) =
+                        app.global_shortcut().register(fallback_shortcut.clone())
+                    {
+                        update_shell_state(&state, |snapshot| {
+                            snapshot.active_shortcut = PRIMARY_SHORTCUT_LABEL.into();
+                            snapshot.used_fallback_shortcut = false;
+                            snapshot.global_shortcut_registered = false;
+                            snapshot.message = Some(format!(
+                                "Global shortcut registration failed. Alt+Space error: {primary_error}. Fallback error: {fallback_error}."
+                            ));
+                        });
+                    } else {
+                        update_shell_state(&state, |snapshot| {
+                            snapshot.active_shortcut = FALLBACK_SHORTCUT_LABEL.into();
+                            snapshot.used_fallback_shortcut = true;
+                            snapshot.global_shortcut_registered = true;
+                            snapshot.message = Some(format!(
+                                "Alt+Space was unavailable. PilotBell is using Ctrl+Shift+Space instead. Original error: {primary_error}."
+                            ));
+                        });
+                    }
+                }
+            }
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             delete_provider_secret,
+            get_app_shell_state,
             handle_prompt,
+            hide_palette_window,
             store_provider_secret,
             test_provider
         ])

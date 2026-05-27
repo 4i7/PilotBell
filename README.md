@@ -7,15 +7,17 @@ The project is currently in an early MVP stage. The current milestone includes a
 ## Current Scope
 
 - Clean desktop window
+- Global shortcut palette toggle with prompt refocus
 - Prompt textarea
 - Send button
 - Response display area
-- Provider registration settings (name / endpoint / model / API key)
+- Provider registration settings (type / name / endpoint / model / API key)
 - Local provider metadata saved in browser storage
 - Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
+- Provider adapter foundation for request validation, health checks, payload building, and response parsing
 
-Planned next steps include a global shortcut, a compact spotlight-style window, provider adapters for remote and local models, and optional local knowledge-base integrations.
+Planned next steps include session history and retry UX, additional provider adapters for remote and local models, and optional local knowledge-base integrations.
 
 ## Setup
 
@@ -50,6 +52,14 @@ npm run tauri build
 - Provider metadata is stored in browser localStorage for the current desktop profile.
 - Provider API keys are stored separately in the OS credential store from the Rust/Tauri side.
 - Existing browser-stored provider secrets are migrated on startup when possible.
+
+## Command Palette Behavior
+
+- `Alt+Space` toggles the main window when the shortcut is available.
+- If `Alt+Space` is already reserved by the OS or another app, PilotBell falls back to `Ctrl+Shift+Space`.
+- Showing the window focuses the prompt automatically.
+- Press `Escape` to hide the window without clearing the current prompt or provider selection.
+- Window size and position are restored between launches.
 
 The Windows installer for general users is generated as an NSIS `.exe` bundle:
 
@@ -90,5 +100,6 @@ cargo check
 
 ## Next Phase Hooks
 
-- Phase 2: add `@tauri-apps/plugin-global-shortcut` and spotlight-style window toggle.
-- Phase 3: move API keys to secure storage and add provider adapters for OpenAI, Anthropic, Ollama, llama.cpp, Obsidian vaults, and local KB search.
+- Phase 3: add prompt history, retry/copy actions, and richer provider status UX.
+- Phase 3: add adapters for Anthropic, Ollama, and llama.cpp on top of the shared Rust provider interface.
+- Phase 4: add local source registration, indexing, and retrieval-backed prompt context.
