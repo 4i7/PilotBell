@@ -12,6 +12,11 @@ import {
   normalizeProviderDraft,
 } from "./domain/provider";
 import { loadProviderState, saveProviders } from "./lib/providerStore";
+import {
+  type PromptSessionEntry,
+  loadPromptSession,
+  savePromptSession,
+} from "./lib/sessionStore";
 import "./App.css";
 
 type AssistantReply = {
@@ -79,7 +84,10 @@ function hasTauriRuntime() {
     return false;
   }
 
-  return typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
+  return (
+    typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
+    "undefined"
+  );
 }
 
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
@@ -110,12 +118,33 @@ function localValidationError(message: string): ProviderCommandError {
   };
 }
 
+function makeSessionEntryId() {
+  return `session-${crypto.randomUUID()}`;
+}
+
+function formatSessionTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown time";
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function App() {
   const [initialProviderState] = useState(() => loadProviderState());
   const [prompt, setPrompt] = useState("");
   const [reply, setReply] = useState<AssistantReply | null>(null);
   const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
   const [shellState, setShellState] = useState<AppShellState | null>(null);
+  const [sessionEntries, setSessionEntries] = useState<PromptSessionEntry[]>(() =>
+    loadPromptSession(),
+  );
   const [isSending, setIsSending] = useState(false);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
   const [isSavingProvider, setIsSavingProvider] = useState(false);
@@ -139,12 +168,26 @@ function App() {
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
+  const latestSessionEntry = sessionEntries[0] ?? null;
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   function persistProviders(next: ProviderConfig[]) {
     setProviders(next);
     saveProviders(next);
+  }
+
+  function persistSessionEntries(next: PromptSessionEntry[]) {
+    setSessionEntries(next);
+    savePromptSession(next);
+  }
+
+  function addSessionEntry(entry: PromptSessionEntry) {
+    setSessionEntries((current) => {
+      const next = [entry, ...current];
+      savePromptSession(next);
+      return next;
+    });
   }
 
   async function storeProviderSecret(providerId: string, apiKey: string) {
@@ -487,32 +530,85 @@ function App() {
     }
   }
 
-  async function sendPrompt() {
+  async function copyText(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setProviderStatus({
+        tone: "success",
+        message: `${label} copied to clipboard.`,
+      });
+    } catch (err) {
+      setProviderStatus({
+        tone: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function clearSession() {
+    persistSessionEntries([]);
+    setReply(null);
+    setReplyError(null);
+    setProviderStatus({
+      tone: "neutral",
+      message: "Prompt session cleared.",
+    });
+  }
+
+  function retrySessionEntry(entry: PromptSessionEntry) {
+    const provider = providers.find((candidate) => candidate.id === entry.providerId);
+    if (!provider) {
+      setProviderStatus({
+        tone: "warning",
+        message: "The provider used for that prompt is no longer available.",
+      });
+      setPrompt(entry.prompt);
+      return;
+    }
+
+    setSelectedProviderId(provider.id);
+    void sendPrompt(entry.prompt, provider);
+  }
+
+  async function sendPrompt(promptOverride?: string, providerOverride?: ProviderConfig) {
     if (!isTauriRuntime) {
       setReplyError(localValidationError(BROWSER_PREVIEW_MESSAGE));
       return;
     }
 
-    if (!selectedProvider) {
+    const targetPrompt = promptOverride ?? prompt;
+    const targetProvider = providerOverride ?? selectedProvider;
+
+    if (!targetProvider) {
       setReplyError(localValidationError("Select a provider before sending."));
       return;
     }
-    if (!prompt.trim()) {
+    if (!targetPrompt.trim()) {
       setReplyError(localValidationError("Prompt is empty."));
       return;
     }
 
     setIsSending(true);
     setReplyError(null);
+    setPrompt(targetPrompt);
 
     try {
       const result = await invoke<CommandResult<AssistantReply>>("handle_prompt", {
-        prompt,
-        provider: selectedProvider,
+        prompt: targetPrompt,
+        provider: targetProvider,
       });
       if (result.status === "success") {
         setReply(result.data);
         setReplyError(null);
+        addSessionEntry({
+          id: makeSessionEntryId(),
+          prompt: targetPrompt,
+          createdAt: new Date().toISOString(),
+          providerId: targetProvider.id,
+          providerName: result.data.provider,
+          model: result.data.model,
+          response: result.data.content,
+        });
         setProviderStatus({
           tone: "success",
           message: `Last response came from ${result.data.provider} / ${result.data.model}.`,
@@ -520,6 +616,15 @@ function App() {
       } else {
         setReply(null);
         setReplyError(result.error);
+        addSessionEntry({
+          id: makeSessionEntryId(),
+          prompt: targetPrompt,
+          createdAt: new Date().toISOString(),
+          providerId: targetProvider.id,
+          providerName: targetProvider.name,
+          model: targetProvider.model,
+          error: result.error.message,
+        });
         setProviderStatus({
           tone: toneForProviderError(result.error),
           message: result.error.retryable
@@ -553,7 +658,7 @@ function App() {
             </p>
           ) : null}
         </div>
-        <span className="phase">Phase 2 Foundation</span>
+        <span className="phase">Phase 3 Daily UX</span>
       </header>
 
       <section className="composer">
@@ -663,9 +768,9 @@ function App() {
           </ul>
         ) : (
           <p className="empty">
-              {!isTauriRuntime
-                ? "Open PilotBell through Tauri to save and test providers."
-                : isMigratingProviders
+            {!isTauriRuntime
+              ? "Open PilotBell through Tauri to save and test providers."
+              : isMigratingProviders
                 ? "Migrating saved providers into the OS credential store..."
                 : "Save a provider, select it, then test the API."}
           </p>
@@ -710,7 +815,43 @@ function App() {
       </form>
 
       <section className="response" aria-live="polite">
-        <div className="section-title">Response</div>
+        <div className="section-heading">
+          <div className="section-title">Response</div>
+          <div className="inline-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                if (latestSessionEntry) {
+                  retrySessionEntry(latestSessionEntry);
+                }
+              }}
+              disabled={isSending || !latestSessionEntry || !isTauriRuntime}
+            >
+              Retry last
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                if (reply) {
+                  void copyText(reply.content, "Response");
+                }
+              }}
+              disabled={!reply}
+            >
+              Copy response
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={clearSession}
+              disabled={sessionEntries.length === 0 && !reply && !replyError}
+            >
+              Clear session
+            </button>
+          </div>
+        </div>
         {replyError ? (
           <div className="response-stack">
             <pre className="error">{replyError.message}</pre>
@@ -725,6 +866,53 @@ function App() {
           <pre>{reply.content}</pre>
         ) : (
           <p className="empty">Waiting for a prompt.</p>
+        )}
+      </section>
+
+      <section className="history">
+        <div className="section-heading">
+          <div className="section-title">Prompt history</div>
+          <span className="status">{sessionEntries.length} recent item(s)</span>
+        </div>
+        {sessionEntries.length > 0 ? (
+          <ol className="history-list">
+            {sessionEntries.map((entry) => (
+              <li key={entry.id} className="history-item">
+                <div className="history-main">
+                  <div className="history-meta">
+                    {formatSessionTime(entry.createdAt)} / {entry.providerName} / {entry.model}
+                  </div>
+                  <p className="history-prompt">{entry.prompt}</p>
+                  {entry.response ? (
+                    <p className="history-preview">{entry.response}</p>
+                  ) : entry.error ? (
+                    <p className="history-error">{entry.error}</p>
+                  ) : null}
+                </div>
+                <div className="history-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => retrySessionEntry(entry)}
+                    disabled={isSending || !isTauriRuntime}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      void copyText(entry.response ?? entry.error ?? entry.prompt, "History item")
+                    }
+                  >
+                    Copy
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="empty">Recent prompts will appear here after the first response.</p>
         )}
       </section>
     </main>

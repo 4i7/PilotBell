@@ -25,7 +25,7 @@ are handled on the Rust/Tauri side instead of in a browser-only shell.
 
 ### Phase 3 - Daily-use UX
 
-- [ ] Add prompt history, retry, copy, and clear-session actions
+- [x] Add prompt history, retry, copy, and clear-session actions
 - [ ] Improve provider status UX with richer health/readiness data
 - [ ] Add provider edit flow and per-provider capability display
 - [ ] Add hosted and local adapters beyond OpenAI Responses
@@ -42,6 +42,7 @@ are handled on the Rust/Tauri side instead of in a browser-only shell.
 
 - `src/domain/provider.ts` - provider metadata types and normalization
 - `src/lib/providerStore.ts` - browser-side provider metadata persistence
+- `src/lib/sessionStore.ts` - local prompt session persistence
 - `src/App.tsx` - provider UI, command status, and prompt interaction flow
 
 ### Backend
