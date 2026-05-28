@@ -18,6 +18,23 @@ export type LocalSourceDraft = {
   notes: string;
 };
 
+export type IndexedSourceChunk = {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  path: string;
+  snippet: string;
+  text: string;
+};
+
+export type LocalSourceIndexSnapshot = {
+  builtAt: string;
+  sourceCount: number;
+  documentCount: number;
+  chunkCount: number;
+  chunks: IndexedSourceChunk[];
+};
+
 export function isLocalSourceKind(value: unknown): value is LocalSourceKind {
   return value === DIRECTORY_SOURCE_KIND || value === FILE_SOURCE_KIND;
 }

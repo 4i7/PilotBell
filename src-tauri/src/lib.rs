@@ -3,6 +3,8 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -18,6 +20,10 @@ const ANTHROPIC_VERSION_HEADER: &str = "2023-06-01";
 const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
 const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
 const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
+const MAX_INDEXED_DOCUMENTS: usize = 200;
+const MAX_FILE_BYTES: usize = 200_000;
+const CHUNK_SIZE: usize = 1_200;
+const CHUNK_OVERLAP: usize = 200;
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -42,6 +48,24 @@ struct ProviderConfig {
 struct ProviderSecretInput {
     provider_id: String,
     api_key: String,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LocalSourceInput {
+    id: String,
+    kind: String,
+    name: String,
+    path: String,
+    notes: Option<String>,
+}
+
+#[derive(Clone)]
+struct SourceDocument {
+    source_id: String,
+    source_name: String,
+    path: String,
+    text: String,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +160,27 @@ struct ProviderHealth {
 #[serde(rename_all = "camelCase")]
 struct ProviderSecretStatus {
     provider_id: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexedSourceChunk {
+    id: String,
+    source_id: String,
+    source_name: String,
+    path: String,
+    snippet: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceIndexBuildResult {
+    source_count: usize,
+    document_count: usize,
+    chunk_count: usize,
+    chunks: Vec<IndexedSourceChunk>,
     message: String,
 }
 
@@ -380,6 +425,195 @@ fn preview_text(raw: &str) -> Option<String> {
         preview.push(ch);
     }
     Some(preview)
+}
+
+fn validate_local_source(source: &LocalSourceInput) -> Result<PathBuf, String> {
+    if source.id.trim().is_empty() || source.name.trim().is_empty() || source.path.trim().is_empty()
+    {
+        return Err("Local source registration is incomplete.".into());
+    }
+
+    let path = PathBuf::from(source.path.trim());
+    match source.kind.trim() {
+        "file" if path.is_file() => Ok(path),
+        "directory" if path.is_dir() => Ok(path),
+        "file" => Err(format!(
+            "Registered file source was not found: {}",
+            source.path
+        )),
+        "directory" => Err(format!(
+            "Registered directory source was not found: {}",
+            source.path
+        )),
+        other => Err(format!("Unsupported local source type: {other}")),
+    }
+}
+
+fn is_supported_source_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "txt"
+                | "md"
+                | "mdx"
+                | "json"
+                | "csv"
+                | "ts"
+                | "tsx"
+                | "js"
+                | "jsx"
+                | "rs"
+                | "py"
+                | "html"
+                | "css"
+                | "toml"
+                | "yaml"
+                | "yml"
+        )
+    )
+}
+
+fn truncate_to_char_limit(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect::<String>()
+}
+
+fn chunk_source_text(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let end = usize::min(start + CHUNK_SIZE, chars.len());
+        let chunk = chars[start..end].iter().collect::<String>();
+        let trimmed = chunk.trim();
+        if !trimmed.is_empty() {
+            chunks.push(trimmed.to_string());
+        }
+        if end == chars.len() {
+            break;
+        }
+        start = end.saturating_sub(CHUNK_OVERLAP);
+    }
+
+    chunks
+}
+
+fn read_source_file(
+    path: &Path,
+    source: &LocalSourceInput,
+) -> Result<Option<SourceDocument>, String> {
+    if !is_supported_source_file(path) {
+        return Ok(None);
+    }
+
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "Failed to read local source file {}: {error}",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let truncated = &bytes[..usize::min(bytes.len(), MAX_FILE_BYTES)];
+    let mut text = String::from_utf8_lossy(truncated).replace("\r\n", "\n");
+    if let Some(notes) = source
+        .notes
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        text = format!("Source notes: {notes}\n\n{text}");
+    }
+
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(SourceDocument {
+        source_id: source.id.clone(),
+        source_name: source.name.clone(),
+        path: path.display().to_string(),
+        text: text.to_string(),
+    }))
+}
+
+fn collect_directory_documents(
+    path: &Path,
+    source: &LocalSourceInput,
+    documents: &mut Vec<SourceDocument>,
+) -> Result<(), String> {
+    if documents.len() >= MAX_INDEXED_DOCUMENTS {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(path).map_err(|error| {
+        format!(
+            "Failed to read local source directory {}: {error}",
+            path.display()
+        )
+    })?;
+
+    for entry in entries {
+        if documents.len() >= MAX_INDEXED_DOCUMENTS {
+            break;
+        }
+
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to inspect directory entry in {}: {error}",
+                path.display()
+            )
+        })?;
+        let entry_path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "Failed to inspect file type for {}: {error}",
+                entry_path.display()
+            )
+        })?;
+
+        if file_type.is_dir() {
+            collect_directory_documents(&entry_path, source, documents)?;
+        } else if file_type.is_file() {
+            if let Some(document) = read_source_file(&entry_path, source)? {
+                documents.push(document);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_documents_for_sources(
+    sources: &[LocalSourceInput],
+) -> Result<Vec<SourceDocument>, String> {
+    let mut documents = Vec::new();
+
+    for source in sources {
+        let path = validate_local_source(source)?;
+        if path.is_file() {
+            if let Some(document) = read_source_file(&path, source)? {
+                documents.push(document);
+            }
+        } else if path.is_dir() {
+            collect_directory_documents(&path, source, &mut documents)?;
+        }
+
+        if documents.len() >= MAX_INDEXED_DOCUMENTS {
+            break;
+        }
+    }
+
+    Ok(documents)
 }
 
 fn build_openai_responses_payload(provider: &ProviderConfig, prompt: &str) -> Value {
@@ -819,6 +1053,55 @@ fn hide_palette_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn build_source_index(sources: Vec<LocalSourceInput>) -> Result<SourceIndexBuildResult, String> {
+    if sources.is_empty() {
+        return Err("Register at least one local source before building the index.".into());
+    }
+
+    let documents = build_documents_for_sources(&sources)?;
+    if documents.is_empty() {
+        return Err(
+            "No supported text documents were found in the registered local sources.".into(),
+        );
+    }
+
+    let mut chunks = Vec::new();
+    for (document_index, document) in documents.iter().enumerate() {
+        for (index, chunk) in chunk_source_text(&document.text).into_iter().enumerate() {
+            let snippet =
+                preview_text(&chunk).unwrap_or_else(|| truncate_to_char_limit(&chunk, 240));
+            chunks.push(IndexedSourceChunk {
+                id: format!("{}-{document_index}-{index}", document.source_id),
+                source_id: document.source_id.clone(),
+                source_name: document.source_name.clone(),
+                path: document.path.clone(),
+                snippet,
+                text: chunk,
+            });
+        }
+    }
+
+    if chunks.is_empty() {
+        return Err(
+            "Registered sources were readable, but no indexable text chunks were produced.".into(),
+        );
+    }
+
+    Ok(SourceIndexBuildResult {
+        source_count: sources.len(),
+        document_count: documents.len(),
+        chunk_count: chunks.len(),
+        message: format!(
+            "Indexed {} document(s) from {} registered source(s) into {} chunk(s).",
+            documents.len(),
+            sources.len(),
+            chunks.len()
+        ),
+        chunks,
+    })
+}
+
+#[tauri::command]
 async fn store_provider_secret(
     input: ProviderSecretInput,
 ) -> ProviderCommandResult<ProviderSecretStatus> {
@@ -979,6 +1262,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            build_source_index,
             delete_provider_secret,
             get_app_shell_state,
             handle_prompt,
@@ -1205,5 +1489,49 @@ mod tests {
             parse_llama_cpp_chat_output(raw, parsed).expect("generated text should be extracted");
 
         assert_eq!(text, "local answer");
+    }
+
+    #[test]
+    fn chunk_source_text_splits_large_documents() {
+        let text = "alpha ".repeat(600);
+        let chunks = chunk_source_text(&text);
+
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|chunk| !chunk.trim().is_empty()));
+    }
+
+    #[test]
+    fn build_source_index_reads_a_registered_file() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pilotbell-index-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let file_path = temp_dir.join("notes.md");
+        fs::write(
+            &file_path,
+            "# Notes\nPilotBell local knowledge should index this file.\n",
+        )
+        .expect("test file should be written");
+
+        let result = build_source_index(vec![LocalSourceInput {
+            id: "source-1".into(),
+            kind: "file".into(),
+            name: "Notes".into(),
+            path: file_path.display().to_string(),
+            notes: Some("Important reference".into()),
+        }])
+        .expect("index should build");
+
+        assert_eq!(result.source_count, 1);
+        assert_eq!(result.document_count, 1);
+        assert!(!result.chunks.is_empty());
+        assert!(result.chunks[0].text.contains("Important reference"));
+
+        let _ = fs::remove_file(&file_path);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

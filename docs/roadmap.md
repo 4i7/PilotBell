@@ -33,8 +33,8 @@ are handled on the Rust/Tauri side instead of in a browser-only shell.
 ### Phase 4 - Local knowledge
 
 - [x] Add local source registration
-- [ ] Add indexing and retrieval storage
-- [ ] Inject retrieved context into the provider request pipeline
+- [x] Add indexing and retrieval storage
+- [x] Inject retrieved context into the provider request pipeline
 
 ## Current Implementation Areas
 
@@ -44,6 +44,7 @@ are handled on the Rust/Tauri side instead of in a browser-only shell.
 - `src/domain/source.ts` - local source registration types and normalization
 - `src/lib/providerStore.ts` - browser-side provider metadata persistence
 - `src/lib/sourceStore.ts` - local source registration persistence
+- `src/lib/sourceIndexStore.ts` - local source index snapshot persistence
 - `src/lib/sessionStore.ts` - local prompt session persistence
 - `src/App.tsx` - provider UI, command status, and prompt interaction flow
 

@@ -19,8 +19,10 @@ import {
 import {
   DIRECTORY_SOURCE_KIND,
   FILE_SOURCE_KIND,
+  type IndexedSourceChunk,
   type LocalSource,
   type LocalSourceDraft,
+  type LocalSourceIndexSnapshot,
   type LocalSourceKind,
   isLocalSourceDraftValid,
   makeLocalSourceId,
@@ -33,6 +35,11 @@ import {
   savePromptSession,
 } from "./lib/sessionStore";
 import { loadLocalSources, saveLocalSources } from "./lib/sourceStore";
+import {
+  clearLocalSourceIndex,
+  loadLocalSourceIndex,
+  saveLocalSourceIndex,
+} from "./lib/sourceIndexStore";
 import {
   type ProviderHealthRecord,
   type ProviderReadiness,
@@ -70,6 +77,14 @@ type ProviderHealth = {
 
 type ProviderSecretStatus = {
   providerId: string;
+  message: string;
+};
+
+type SourceIndexBuildResult = {
+  sourceCount: number;
+  documentCount: number;
+  chunkCount: number;
+  chunks: IndexedSourceChunk[];
   message: string;
 };
 
@@ -237,6 +252,68 @@ function readinessLabel(readiness: ProviderReadiness) {
   }
 }
 
+function tokenizeForRetrieval(text: string) {
+  return Array.from(
+    new Set(text.toLowerCase().match(/[a-z0-9_./:\\-]{3,}/g) ?? []),
+  );
+}
+
+function selectRelevantChunks(
+  prompt: string,
+  snapshot: LocalSourceIndexSnapshot | null,
+  limit = 3,
+) {
+  if (!snapshot || snapshot.chunks.length === 0) {
+    return [];
+  }
+
+  const promptTerms = new Set(tokenizeForRetrieval(prompt));
+  if (promptTerms.size === 0) {
+    return [];
+  }
+
+  return snapshot.chunks
+    .map((chunk) => {
+      const haystackTerms = tokenizeForRetrieval(
+        `${chunk.sourceName} ${chunk.path} ${chunk.snippet} ${chunk.text}`,
+      );
+      const score = haystackTerms.reduce(
+        (total, term) => total + (promptTerms.has(term) ? 1 : 0),
+        0,
+      );
+      return { chunk, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((item) => item.chunk);
+}
+
+function buildPromptWithLocalContext(
+  prompt: string,
+  snapshot: LocalSourceIndexSnapshot | null,
+) {
+  const chunks = selectRelevantChunks(prompt, snapshot);
+  if (chunks.length === 0) {
+    return {
+      preparedPrompt: prompt,
+      contextCount: 0,
+    };
+  }
+
+  const contextBlock = chunks
+    .map(
+      (chunk, index) =>
+        `[${index + 1}] ${chunk.sourceName}\nPath: ${chunk.path}\n${chunk.text}`,
+    )
+    .join("\n\n");
+
+  return {
+    preparedPrompt: `Use the following local context when it is relevant to the user's request.\n\n${contextBlock}\n\nUser prompt:\n${prompt}`,
+    contextCount: chunks.length,
+  };
+}
+
 function App() {
   const [initialProviderState] = useState(() => loadProviderState());
   const [prompt, setPrompt] = useState("");
@@ -258,12 +335,16 @@ function App() {
   const [removingProviderId, setRemovingProviderId] = useState("");
   const [providerStatus, setProviderStatus] = useState<InlineStatus | null>(null);
   const [sourceStatus, setSourceStatus] = useState<InlineStatus | null>(null);
+  const [isBuildingSourceIndex, setIsBuildingSourceIndex] = useState(false);
 
   const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({ ...DEFAULT_PROVIDER_DRAFT });
   const [localSources, setLocalSources] = useState<LocalSource[]>(() => loadLocalSources());
+  const [sourceIndexSnapshot, setSourceIndexSnapshot] = useState<LocalSourceIndexSnapshot | null>(
+    () => loadLocalSourceIndex(),
+  );
   const [editingSourceId, setEditingSourceId] = useState("");
   const [removingSourceId, setRemovingSourceId] = useState("");
   const [sourceDraft, setSourceDraft] = useState<LocalSourceDraft>({
@@ -301,6 +382,16 @@ function App() {
   function persistLocalSources(next: LocalSource[]) {
     setLocalSources(next);
     saveLocalSources(next);
+  }
+
+  function persistLocalSourceIndex(next: LocalSourceIndexSnapshot) {
+    setSourceIndexSnapshot(next);
+    saveLocalSourceIndex(next);
+  }
+
+  function resetLocalSourceIndex() {
+    setSourceIndexSnapshot(null);
+    clearLocalSourceIndex();
   }
 
   function persistSessionEntries(next: PromptSessionEntry[]) {
@@ -864,15 +955,17 @@ function App() {
       persistLocalSources(
         localSources.map((source) => (source.id === nextSource.id ? nextSource : source)),
       );
+      resetLocalSourceIndex();
       setSourceStatus({
         tone: "success",
-        message: `Updated ${nextSource.name}. Indexing is not active yet, but the source is registered locally.`,
+        message: `Updated ${nextSource.name}. Rebuild the local index to refresh retrieval context.`,
       });
     } else {
       persistLocalSources([nextSource, ...localSources]);
+      resetLocalSourceIndex();
       setSourceStatus({
         tone: "success",
-        message: `Registered ${nextSource.name} for the upcoming local knowledge pipeline.`,
+        message: `Registered ${nextSource.name}. Build the local index to make it retrievable in prompts.`,
       });
     }
 
@@ -883,14 +976,64 @@ function App() {
     setRemovingSourceId(id);
     const next = localSources.filter((source) => source.id !== id);
     persistLocalSources(next);
+    resetLocalSourceIndex();
     if (editingSourceId === id) {
       resetSourceDraft();
     }
     setSourceStatus({
       tone: "neutral",
-      message: "Local source registration removed.",
+      message: "Local source registration removed. Rebuild the local index if needed.",
     });
     setRemovingSourceId("");
+  }
+
+  async function buildSourceIndex() {
+    if (!isTauriRuntime) {
+      setSourceStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      return;
+    }
+
+    if (localSources.length === 0) {
+      setSourceStatus({
+        tone: "warning",
+        message: "Register at least one local source before building the index.",
+      });
+      return;
+    }
+
+    setIsBuildingSourceIndex(true);
+    setSourceStatus({
+      tone: "neutral",
+      message: `Indexing ${localSources.length} local source(s)...`,
+    });
+
+    try {
+      const result = await invoke<SourceIndexBuildResult>("build_source_index", {
+        sources: localSources,
+      });
+      const snapshot: LocalSourceIndexSnapshot = {
+        builtAt: new Date().toISOString(),
+        sourceCount: result.sourceCount,
+        documentCount: result.documentCount,
+        chunkCount: result.chunkCount,
+        chunks: result.chunks,
+      };
+      persistLocalSourceIndex(snapshot);
+      setSourceStatus({
+        tone: "success",
+        message: `${result.message} Retrieval context is now active for matching prompts.`,
+      });
+    } catch (err) {
+      setSourceStatus({
+        tone: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsBuildingSourceIndex(false);
+    }
   }
 
   async function testProvider() {
@@ -1025,8 +1168,12 @@ function App() {
     setPrompt(targetPrompt);
 
     try {
+      const { preparedPrompt, contextCount } = buildPromptWithLocalContext(
+        targetPrompt,
+        sourceIndexSnapshot,
+      );
       const result = await invoke<CommandResult<AssistantReply>>("handle_prompt", {
-        prompt: targetPrompt,
+        prompt: preparedPrompt,
         provider: targetProvider,
       });
       if (result.status === "success") {
@@ -1043,7 +1190,10 @@ function App() {
         });
         setProviderStatus({
           tone: "success",
-          message: `Last response came from ${result.data.provider} / ${result.data.model}.`,
+          message:
+            contextCount > 0
+              ? `Last response came from ${result.data.provider} / ${result.data.model} using ${contextCount} local context chunk(s).`
+              : `Last response came from ${result.data.provider} / ${result.data.model}.`,
         });
       } else {
         setReply(null);
@@ -1060,8 +1210,12 @@ function App() {
         setProviderStatus({
           tone: toneForProviderError(result.error),
           message: result.error.retryable
-            ? "Provider request failed. Retry is available after you adjust settings or credentials."
-            : "Provider request failed. Review the provider status details before retrying.",
+            ? contextCount > 0
+              ? "Provider request failed after local context injection. Retry is available after you adjust settings, sources, or credentials."
+              : "Provider request failed. Retry is available after you adjust settings or credentials."
+            : contextCount > 0
+              ? "Provider request failed after local context injection. Review the provider and source index details before retrying."
+              : "Provider request failed. Review the provider status details before retrying.",
         });
       }
     } catch (err) {
@@ -1076,7 +1230,7 @@ function App() {
 
   const isProviderActionsDisabled =
     isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
-  const isSourceActionsDisabled = removingSourceId.length > 0;
+  const isSourceActionsDisabled = removingSourceId.length > 0 || isBuildingSourceIndex;
 
   return (
     <main className="shell">
@@ -1091,7 +1245,7 @@ function App() {
             </p>
           ) : null}
         </div>
-        <span className="phase">Phase 4 Sources</span>
+        <span className="phase">Phase 4 Complete</span>
       </header>
 
       <section className="composer">
@@ -1293,7 +1447,8 @@ function App() {
         </div>
         <p className="helper">
           Register folders or files that should become part of the local knowledge pipeline.
-          This slice stores source metadata only; indexing and retrieval are still pending.
+          Build the local index after source changes so PilotBell can inject matching context
+          into outgoing prompts.
         </p>
         <div className="grid">
           <select
@@ -1341,6 +1496,13 @@ function App() {
           >
             {editingSource ? "Update source" : "Save source"}
           </button>
+          <button
+            type="button"
+            onClick={() => void buildSourceIndex()}
+            disabled={!isTauriRuntime || isSourceActionsDisabled || localSources.length === 0}
+          >
+            {isBuildingSourceIndex ? "Indexing..." : "Build index"}
+          </button>
           {editingSource ? (
             <button
               type="button"
@@ -1351,7 +1513,12 @@ function App() {
               Cancel edit
             </button>
           ) : null}
-          <span className="status">{localSources.length} local source(s) registered</span>
+          <span className="status">
+            {localSources.length} local source(s) registered
+            {sourceIndexSnapshot
+              ? ` / ${sourceIndexSnapshot.documentCount} documents / ${sourceIndexSnapshot.chunkCount} chunks / built ${formatSessionTime(sourceIndexSnapshot.builtAt)}`
+              : " / index not built"}
+          </span>
         </div>
         {sourceStatus ? (
           <div className={`notice notice-${sourceStatus.tone}`}>{sourceStatus.message}</div>
