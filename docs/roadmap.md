@@ -26,7 +26,7 @@ are handled on the Rust/Tauri side instead of in a browser-only shell.
 ### Phase 3 - Daily-use UX
 
 - [x] Add prompt history, retry, copy, and clear-session actions
-- [ ] Improve provider status UX with richer health/readiness data
+- [x] Improve provider status UX with richer health/readiness data
 - [ ] Add provider edit flow and per-provider capability display
 - [ ] Add hosted and local adapters beyond OpenAI Responses
 
