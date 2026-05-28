@@ -27,7 +27,7 @@ are handled on the Rust/Tauri side instead of in a browser-only shell.
 
 - [x] Add prompt history, retry, copy, and clear-session actions
 - [x] Improve provider status UX with richer health/readiness data
-- [ ] Add provider edit flow and per-provider capability display
+- [x] Add provider edit flow and per-provider capability display
 - [ ] Add hosted and local adapters beyond OpenAI Responses
 
 ### Phase 4 - Local knowledge
