@@ -17,6 +17,12 @@ import {
   loadPromptSession,
   savePromptSession,
 } from "./lib/sessionStore";
+import {
+  type ProviderHealthRecord,
+  type ProviderReadiness,
+  loadProviderHealthRecords,
+  saveProviderHealthRecords,
+} from "./lib/providerHealthStore";
 import "./App.css";
 
 type AssistantReply = {
@@ -136,6 +142,38 @@ function formatSessionTime(value: string) {
   });
 }
 
+function formatRelativeTime(value: string) {
+  const checkedAt = new Date(value).getTime();
+  if (Number.isNaN(checkedAt)) {
+    return "unknown";
+  }
+
+  const elapsedMs = Date.now() - checkedAt;
+  const elapsedMinutes = Math.max(0, Math.round(elapsedMs / 60_000));
+  if (elapsedMinutes < 1) {
+    return "just now";
+  }
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m ago`;
+  }
+
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  return `${elapsedHours}h ago`;
+}
+
+function readinessLabel(readiness: ProviderReadiness) {
+  switch (readiness) {
+    case "ready":
+      return "Ready";
+    case "warning":
+      return "Needs attention";
+    case "error":
+      return "Offline";
+    case "unknown":
+      return "Untested";
+  }
+}
+
 function App() {
   const [initialProviderState] = useState(() => loadProviderState());
   const [prompt, setPrompt] = useState("");
@@ -145,6 +183,9 @@ function App() {
   const [sessionEntries, setSessionEntries] = useState<PromptSessionEntry[]>(() =>
     loadPromptSession(),
   );
+  const [providerHealthRecords, setProviderHealthRecords] = useState<
+    Record<string, ProviderHealthRecord>
+  >(() => loadProviderHealthRecords());
   const [isSending, setIsSending] = useState(false);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
   const [isSavingProvider, setIsSavingProvider] = useState(false);
@@ -169,6 +210,9 @@ function App() {
     [providers, selectedProviderId],
   );
   const latestSessionEntry = sessionEntries[0] ?? null;
+  const selectedProviderHealth = selectedProvider
+    ? providerHealthRecords[selectedProvider.id] ?? null
+    : null;
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -186,6 +230,26 @@ function App() {
     setSessionEntries((current) => {
       const next = [entry, ...current];
       savePromptSession(next);
+      return next;
+    });
+  }
+
+  function updateProviderHealthRecord(record: ProviderHealthRecord) {
+    setProviderHealthRecords((current) => {
+      const next = {
+        ...current,
+        [record.providerId]: record,
+      };
+      saveProviderHealthRecords(next);
+      return next;
+    });
+  }
+
+  function removeProviderHealthRecord(providerId: string) {
+    setProviderHealthRecords((current) => {
+      const next = { ...current };
+      delete next[providerId];
+      saveProviderHealthRecords(next);
       return next;
     });
   }
@@ -465,6 +529,7 @@ function App() {
 
       const next = providers.filter((provider) => provider.id !== id);
       persistProviders(next);
+      removeProviderHealthRecord(id);
       if (selectedProviderId === id) {
         setSelectedProviderId("");
       }
@@ -506,15 +571,36 @@ function App() {
     });
 
     try {
+      const startedAt = performance.now();
       const result = await invoke<CommandResult<ProviderHealth>>("test_provider", {
         provider: selectedProvider,
       });
+      const latencyMs = Math.round(performance.now() - startedAt);
+      const checkedAt = new Date().toISOString();
+
       if (result.status === "success") {
-        setProviderStatus({
-          tone: "success",
+        updateProviderHealthRecord({
+          providerId: selectedProvider.id,
+          readiness: "ready",
+          checkedAt,
+          latencyMs,
           message: result.data.message,
         });
+        setProviderStatus({
+          tone: "success",
+          message: `${result.data.message} (${latencyMs} ms)`,
+        });
       } else {
+        updateProviderHealthRecord({
+          providerId: selectedProvider.id,
+          readiness: result.error.retryable ? "warning" : "error",
+          checkedAt,
+          latencyMs,
+          message: result.error.message,
+          errorKind: result.error.kind,
+          statusCode: result.error.statusCode ?? undefined,
+          retryable: result.error.retryable,
+        });
         setProviderStatus({
           tone: toneForProviderError(result.error),
           message: result.error.message,
@@ -658,7 +744,7 @@ function App() {
             </p>
           ) : null}
         </div>
-        <span className="phase">Phase 3 Daily UX</span>
+        <span className="phase">Phase 3 Readiness</span>
       </header>
 
       <section className="composer">
@@ -745,26 +831,36 @@ function App() {
 
         {providers.length > 0 ? (
           <ul className="provider-list">
-            {providers.map((provider) => (
-              <li key={provider.id}>
-                <button
-                  type="button"
-                  className={provider.id === selectedProviderId ? "provider active" : "provider"}
-                  onClick={() => setSelectedProviderId(provider.id)}
-                  disabled={!isTauriRuntime || isProviderActionsDisabled}
-                >
-                  {provider.name} / {provider.model} / {providerKindLabel(provider.kind)}
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  onClick={() => void removeProvider(provider.id)}
-                  disabled={!isTauriRuntime || isProviderActionsDisabled}
-                >
-                  {removingProviderId === provider.id ? "Removing..." : "Remove"}
-                </button>
-              </li>
-            ))}
+            {providers.map((provider) => {
+              const health = providerHealthRecords[provider.id];
+              const readiness = health?.readiness ?? "unknown";
+
+              return (
+                <li key={provider.id}>
+                  <button
+                    type="button"
+                    className={provider.id === selectedProviderId ? "provider active" : "provider"}
+                    onClick={() => setSelectedProviderId(provider.id)}
+                    disabled={!isTauriRuntime || isProviderActionsDisabled}
+                  >
+                    <span>
+                      {provider.name} / {provider.model} / {providerKindLabel(provider.kind)}
+                    </span>
+                    <span className={`readiness readiness-${readiness}`}>
+                      {readinessLabel(readiness)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => void removeProvider(provider.id)}
+                    disabled={!isTauriRuntime || isProviderActionsDisabled}
+                  >
+                    {removingProviderId === provider.id ? "Removing..." : "Remove"}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="empty">
@@ -813,6 +909,42 @@ function App() {
           </button>
         </div>
       </form>
+
+      <section className="health-panel">
+        <div className="section-heading">
+          <div className="section-title">Provider readiness</div>
+          <span className="status">
+            {selectedProvider ? selectedProvider.name : "No provider selected"}
+          </span>
+        </div>
+        {selectedProvider ? (
+          selectedProviderHealth ? (
+            <div className="health-detail">
+              <span className={`readiness readiness-${selectedProviderHealth.readiness}`}>
+                {readinessLabel(selectedProviderHealth.readiness)}
+              </span>
+              <span>{selectedProviderHealth.message}</span>
+              <span className="status">
+                Checked {formatRelativeTime(selectedProviderHealth.checkedAt)}
+                {selectedProviderHealth.latencyMs
+                  ? ` / ${selectedProviderHealth.latencyMs} ms`
+                  : ""}
+                {selectedProviderHealth.errorKind
+                  ? ` / ${selectedProviderHealth.errorKind}`
+                  : ""}
+                {selectedProviderHealth.statusCode
+                  ? ` / HTTP ${selectedProviderHealth.statusCode}`
+                  : ""}
+                {selectedProviderHealth.retryable ? " / retryable" : ""}
+              </span>
+            </div>
+          ) : (
+            <p className="empty">Run Test API to record readiness for this provider.</p>
+          )
+        ) : (
+          <p className="empty">Select a provider to inspect readiness.</p>
+        )}
+      </section>
 
       <section className="response" aria-live="polite">
         <div className="section-heading">

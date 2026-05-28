@@ -12,13 +12,14 @@ The project is currently in an early MVP stage. The current milestone includes a
 - Send button
 - Response display area
 - Prompt history with retry, copy, and clear-session actions
+- Provider readiness display with last test result, latency, and error category
 - Provider registration settings (type / name / endpoint / model / API key)
 - Local provider metadata saved in browser storage
 - Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
 - Provider adapter foundation for request validation, health checks, payload building, and response parsing
 
-Planned next steps include richer provider readiness UX, additional provider adapters for remote and local models, and optional local knowledge-base integrations.
+Planned next steps include provider editing, additional provider adapters for remote and local models, and optional local knowledge-base integrations.
 
 ## Setup
 
@@ -101,6 +102,6 @@ cargo check
 
 ## Next Phase Hooks
 
-- Phase 3: improve provider health/readiness status and provider edit flow.
+- Phase 3: add provider edit flow and capability-aware provider management.
 - Phase 3: add adapters for Anthropic, Ollama, and llama.cpp on top of the shared Rust provider interface.
 - Phase 4: add local source registration, indexing, and retrieval-backed prompt context.
