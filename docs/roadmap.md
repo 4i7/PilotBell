@@ -1,68 +1,64 @@
-# PilotBell Roadmap (Execution Plan)
+# PilotBell Roadmap
 
-## 目的
-主要機能（実際の AI 呼び出し、プロバイダ管理、履歴、ショートカット、ローカル知識連携）を段階的に実動作させる。
+## Product Direction
 
-## 実動作までに必要な機能洗い出し
+PilotBell is a desktop AI command palette built with Tauri v2, Rust, React, and TypeScript.
+The app is intentionally desktop-first: provider secrets, global shortcuts, and window behavior
+are handled on the Rust/Tauri side instead of in a browser-only shell.
 
-### 1) Provider / API 実行基盤
-- Provider 登録・選択・削除
-- Provider 接続テスト
-- Prompt 実行（成功/失敗ハンドリング）
-- Provider ごとのタイムアウト、再試行、エラー分類
+## Phase Breakdown
 
-### 2) セキュリティ
-- API Key の平文 localStorage 保存を廃止
-- Tauri 側 secure storage（OS keychain or encrypted store）へ移行
-- endpoint allowlist/https 強制
+### Phase 1 - MVP shell
 
-### 3) UX
-- コマンド履歴保存・再実行
-- 送信キャンセル
-- Provider/Model 状態表示
-- ショートカットで表示トグル
+- [x] Provider registration UI
+- [x] Prompt send flow through a registered provider
+- [x] Provider test command
+- [x] Local provider metadata persistence
 
-### 4) 拡張
-- OpenAI 互換以外の adapter 層
-- ローカル LLM（Ollama）
-- ローカル KB / Obsidian 検索
+### Phase 2 - Desktop foundation
 
-## 設計方針（関数・プログラム設計）
+- [x] Move provider API keys out of browser localStorage into OS credential storage
+- [x] Add structured provider errors with validation / network / timeout / response categories
+- [x] Route prompt send and provider test through a provider adapter layer
+- [x] Add global shortcut registration with fallback handling
+- [x] Add command-palette window behavior: prompt refocus, Escape hide, and window-state restore
+
+### Phase 3 - Daily-use UX
+
+- [ ] Add prompt history, retry, copy, and clear-session actions
+- [ ] Improve provider status UX with richer health/readiness data
+- [ ] Add provider edit flow and per-provider capability display
+- [ ] Add hosted and local adapters beyond OpenAI Responses
+
+### Phase 4 - Local knowledge
+
+- [ ] Add local source registration
+- [ ] Add indexing and retrieval storage
+- [ ] Inject retrieved context into the provider request pipeline
+
+## Current Implementation Areas
 
 ### Frontend
-- `domain/provider.ts` : Provider の型・検証・正規化
-- `lib/providerStore.ts` : 永続化 I/O
-- `App.tsx` : UI 合成 + invoke 呼び出し
 
-### Backend (Rust)
-- `validate_provider` : 入力検証（必須項目 / https）
-- `call_provider` : HTTP 呼び出し共通処理
-- `test_provider` : 接続確認 command
-- `handle_prompt` : 実行 command
+- `src/domain/provider.ts` - provider metadata types and normalization
+- `src/lib/providerStore.ts` - browser-side provider metadata persistence
+- `src/App.tsx` - provider UI, command status, and prompt interaction flow
 
-## 開発ロードマップ
+### Backend
 
-### Phase A（着手済み）
-- [x] Provider 登録 UI
-- [x] Prompt の実 API 呼び出し
-- [x] Provider 接続テスト command
-- [x] Provider 検証関数の共通化
+- `src-tauri/src/lib.rs` - provider validation, secure secret access, adapter dispatch,
+  prompt handling, shortcut registration, and window toggle logic
+- `src-tauri/tauri.conf.json` - desktop window and bundling configuration
 
-### Phase B
-- [ ] API key secure storage
-- [ ] timeout/retry 設定
-- [ ] structured error model
+## Validation Baseline
 
-### Phase C
-- [ ] global shortcut + compact window
-- [ ] history + rerun + copy
+- `npm run build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+- `npm run tauri build`
 
-### Phase D
-- [ ] provider adapter architecture
-- [ ] local KB integration
+## Operating Assumptions
 
-
-## 開発環境ポリシー
-- 現在の主対象は Windows 11。
-- Rust/Tauri の正規チェックは Windows ホスト（stable-msvc）で実施。
-- Linux 依存エラーは、Windows 専用開発フェーズでは非ブロッカー扱い。
+- Windows 11 is the primary validation target.
+- The supported Rust toolchain is `stable-msvc`.
+- Linux-native desktop failures are not blockers for the Windows packaging path.

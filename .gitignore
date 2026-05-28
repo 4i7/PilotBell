@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+.playwright-cli/
+vite-dev.log
 
 # Editor directories and files
 .vscode/*
