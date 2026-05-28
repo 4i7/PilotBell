@@ -16,12 +16,23 @@ import {
   normalizeProviderDraft,
   providerRequiresApiKey,
 } from "./domain/provider";
+import {
+  DIRECTORY_SOURCE_KIND,
+  FILE_SOURCE_KIND,
+  type LocalSource,
+  type LocalSourceDraft,
+  type LocalSourceKind,
+  isLocalSourceDraftValid,
+  makeLocalSourceId,
+  normalizeLocalSourceDraft,
+} from "./domain/source";
 import { loadProviderState, saveProviders } from "./lib/providerStore";
 import {
   type PromptSessionEntry,
   loadPromptSession,
   savePromptSession,
 } from "./lib/sessionStore";
+import { loadLocalSources, saveLocalSources } from "./lib/sourceStore";
 import {
   type ProviderHealthRecord,
   type ProviderReadiness,
@@ -108,6 +119,11 @@ const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: LLAMA_CPP_PROVIDER_KIND, label: "llama.cpp" },
 ];
 
+const SOURCE_KIND_OPTIONS: Array<{ value: LocalSourceKind; label: string }> = [
+  { value: DIRECTORY_SOURCE_KIND, label: "Directory" },
+  { value: FILE_SOURCE_KIND, label: "File" },
+];
+
 const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
   kind: DEFAULT_PROVIDER_KIND,
   name: "OpenAI",
@@ -138,6 +154,13 @@ const LLAMA_CPP_PROVIDER_DRAFT: ProviderDraft = {
   endpoint: "http://127.0.0.1:8080/v1/chat/completions",
   apiKey: "",
   model: "local-llama",
+};
+
+const DEFAULT_LOCAL_SOURCE_DRAFT: LocalSourceDraft = {
+  kind: DIRECTORY_SOURCE_KIND,
+  name: "",
+  path: "",
+  notes: "",
 };
 
 function providerKindLabel(kind: ProviderKind) {
@@ -234,11 +257,18 @@ function App() {
   );
   const [removingProviderId, setRemovingProviderId] = useState("");
   const [providerStatus, setProviderStatus] = useState<InlineStatus | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<InlineStatus | null>(null);
 
   const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({ ...DEFAULT_PROVIDER_DRAFT });
+  const [localSources, setLocalSources] = useState<LocalSource[]>(() => loadLocalSources());
+  const [editingSourceId, setEditingSourceId] = useState("");
+  const [removingSourceId, setRemovingSourceId] = useState("");
+  const [sourceDraft, setSourceDraft] = useState<LocalSourceDraft>({
+    ...DEFAULT_LOCAL_SOURCE_DRAFT,
+  });
 
   const selectedProvider = useMemo(
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
@@ -247,6 +277,10 @@ function App() {
   const editingProvider = useMemo(
     () => providers.find((provider) => provider.id === editingProviderId) ?? null,
     [providers, editingProviderId],
+  );
+  const editingSource = useMemo(
+    () => localSources.find((source) => source.id === editingSourceId) ?? null,
+    [localSources, editingSourceId],
   );
   const latestSessionEntry = sessionEntries[0] ?? null;
   const selectedProviderHealth = selectedProvider
@@ -262,6 +296,11 @@ function App() {
   function persistProviders(next: ProviderConfig[]) {
     setProviders(next);
     saveProviders(next);
+  }
+
+  function persistLocalSources(next: LocalSource[]) {
+    setLocalSources(next);
+    saveLocalSources(next);
   }
 
   function persistSessionEntries(next: PromptSessionEntry[]) {
@@ -319,6 +358,10 @@ function App() {
   useEffect(() => {
     if (!isTauriRuntime) {
       setProviderStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      setSourceStatus({
         tone: "warning",
         message: BROWSER_PREVIEW_MESSAGE,
       });
@@ -772,6 +815,84 @@ function App() {
     }
   }
 
+  function resetSourceDraft() {
+    setEditingSourceId("");
+    setSourceDraft({ ...DEFAULT_LOCAL_SOURCE_DRAFT });
+  }
+
+  function beginEditSource(source: LocalSource) {
+    setEditingSourceId(source.id);
+    setSourceDraft({
+      kind: source.kind,
+      name: source.name,
+      path: source.path,
+      notes: source.notes ?? "",
+    });
+    setSourceStatus({
+      tone: "neutral",
+      message: `Editing ${source.name}. Update the path metadata and save when ready.`,
+    });
+  }
+
+  function cancelSourceEdit() {
+    resetSourceDraft();
+    setSourceStatus({
+      tone: "neutral",
+      message: "Source editing cancelled.",
+    });
+  }
+
+  function saveSource() {
+    const normalized = normalizeLocalSourceDraft(sourceDraft);
+    if (!isLocalSourceDraftValid(normalized)) {
+      setSourceStatus({
+        tone: "warning",
+        message: "Source registration failed: name and path are required.",
+      });
+      return;
+    }
+
+    const nextSource: LocalSource = {
+      id: editingSource?.id ?? makeLocalSourceId(),
+      kind: normalized.kind,
+      name: normalized.name,
+      path: normalized.path,
+      notes: normalized.notes || undefined,
+    };
+
+    if (editingSource) {
+      persistLocalSources(
+        localSources.map((source) => (source.id === nextSource.id ? nextSource : source)),
+      );
+      setSourceStatus({
+        tone: "success",
+        message: `Updated ${nextSource.name}. Indexing is not active yet, but the source is registered locally.`,
+      });
+    } else {
+      persistLocalSources([nextSource, ...localSources]);
+      setSourceStatus({
+        tone: "success",
+        message: `Registered ${nextSource.name} for the upcoming local knowledge pipeline.`,
+      });
+    }
+
+    resetSourceDraft();
+  }
+
+  function removeSource(id: string) {
+    setRemovingSourceId(id);
+    const next = localSources.filter((source) => source.id !== id);
+    persistLocalSources(next);
+    if (editingSourceId === id) {
+      resetSourceDraft();
+    }
+    setSourceStatus({
+      tone: "neutral",
+      message: "Local source registration removed.",
+    });
+    setRemovingSourceId("");
+  }
+
   async function testProvider() {
     if (!isTauriRuntime) {
       setProviderStatus({
@@ -955,6 +1076,7 @@ function App() {
 
   const isProviderActionsDisabled =
     isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
+  const isSourceActionsDisabled = removingSourceId.length > 0;
 
   return (
     <main className="shell">
@@ -969,7 +1091,7 @@ function App() {
             </p>
           ) : null}
         </div>
-        <span className="phase">Phase 3 Complete</span>
+        <span className="phase">Phase 4 Sources</span>
       </header>
 
       <section className="composer">
@@ -1158,6 +1280,121 @@ function App() {
               : isMigratingProviders
                 ? "Migrating saved providers into the OS credential store..."
                 : "Save a provider, select it, then test the API."}
+          </p>
+        )}
+      </section>
+
+      <section className="composer">
+        <div className="section-heading">
+          <div className="section-title">Local source registration</div>
+          <span className="status">
+            {editingSource ? `Editing ${editingSource.name}` : "New source"}
+          </span>
+        </div>
+        <p className="helper">
+          Register folders or files that should become part of the local knowledge pipeline.
+          This slice stores source metadata only; indexing and retrieval are still pending.
+        </p>
+        <div className="grid">
+          <select
+            value={sourceDraft.kind}
+            onChange={(event) =>
+              setSourceDraft({
+                ...sourceDraft,
+                kind: event.currentTarget.value as LocalSourceKind,
+              })
+            }
+          >
+            {SOURCE_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <input
+            value={sourceDraft.name}
+            onChange={(event) =>
+              setSourceDraft({ ...sourceDraft, name: event.currentTarget.value })
+            }
+            placeholder="Source name"
+          />
+          <input
+            value={sourceDraft.path}
+            onChange={(event) =>
+              setSourceDraft({ ...sourceDraft, path: event.currentTarget.value })
+            }
+            placeholder="Path (e.g. C:\\Users\\...\\Docs)"
+          />
+          <input
+            value={sourceDraft.notes}
+            onChange={(event) =>
+              setSourceDraft({ ...sourceDraft, notes: event.currentTarget.value })
+            }
+            placeholder="Notes (optional)"
+          />
+        </div>
+        <div className="actions">
+          <button
+            type="button"
+            onClick={saveSource}
+            disabled={!isTauriRuntime || isSourceActionsDisabled}
+          >
+            {editingSource ? "Update source" : "Save source"}
+          </button>
+          {editingSource ? (
+            <button
+              type="button"
+              className="secondary"
+              onClick={cancelSourceEdit}
+              disabled={isSourceActionsDisabled}
+            >
+              Cancel edit
+            </button>
+          ) : null}
+          <span className="status">{localSources.length} local source(s) registered</span>
+        </div>
+        {sourceStatus ? (
+          <div className={`notice notice-${sourceStatus.tone}`}>{sourceStatus.message}</div>
+        ) : null}
+
+        {localSources.length > 0 ? (
+          <ul className="source-list">
+            {localSources.map((source) => (
+              <li key={source.id} className="source-item">
+                <div className="source-main">
+                  <div className="source-meta">
+                    <span className="capability">{source.kind === DIRECTORY_SOURCE_KIND ? "Directory" : "File"}</span>
+                    <span className="status">{source.name}</span>
+                  </div>
+                  <p className="source-path">{source.path}</p>
+                  {source.notes ? <p className="source-notes">{source.notes}</p> : null}
+                </div>
+                <div className="history-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => beginEditSource(source)}
+                    disabled={!isTauriRuntime || isSourceActionsDisabled}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => removeSource(source.id)}
+                    disabled={!isTauriRuntime || isSourceActionsDisabled}
+                  >
+                    {removingSourceId === source.id ? "Removing..." : "Remove"}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="empty">
+            {!isTauriRuntime
+              ? "Open PilotBell through Tauri to register local sources."
+              : "Register a folder or file to start shaping the local knowledge set."}
           </p>
         )}
       </section>

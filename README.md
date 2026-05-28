@@ -16,6 +16,7 @@ The current milestone includes an open provider registration UI where anyone usi
 - Provider registration and editing settings (type / name / endpoint / model / API key)
 - Provider capability badges for adapter-specific behavior
 - Local provider metadata saved in browser storage
+- Local source registration for upcoming knowledge folders and files
 - Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
 - Provider adapter foundation for request validation, health checks, payload building, and response parsing
@@ -99,10 +100,13 @@ cargo check
 - `src/App.tsx` - minimal React UI
 - `src/App.css` - application styling
 - `src/domain/provider.ts` - provider types and normalization
+- `src/domain/source.ts` - local source registration types and normalization
 - `src/lib/providerStore.ts` - browser storage persistence helpers
+- `src/lib/sourceStore.ts` - local source registration persistence helpers
 - `src-tauri/src/lib.rs` - Tauri command handler and provider bridge
 - `src-tauri/tauri.conf.json` - Tauri app configuration
 
 ## Next Phase Hooks
 
-- Phase 4: add local source registration, indexing, and retrieval-backed prompt context.
+- Phase 4: add indexing and retrieval storage for registered local sources.
+- Phase 4: inject retrieved context into the provider request pipeline.
