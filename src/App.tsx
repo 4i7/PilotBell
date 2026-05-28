@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  ANTHROPIC_PROVIDER_KIND,
   DEFAULT_PROVIDER_KIND,
+  LLAMA_CPP_PROVIDER_KIND,
   OLLAMA_PROVIDER_KIND,
   type ProviderConfig,
   type ProviderDraft,
@@ -101,7 +103,9 @@ function hasTauriRuntime() {
 
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
+  { value: ANTHROPIC_PROVIDER_KIND, label: "Anthropic Messages" },
   { value: OLLAMA_PROVIDER_KIND, label: "Ollama" },
+  { value: LLAMA_CPP_PROVIDER_KIND, label: "llama.cpp" },
 ];
 
 const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
@@ -118,6 +122,22 @@ const OLLAMA_PROVIDER_DRAFT: ProviderDraft = {
   endpoint: "http://127.0.0.1:11434/api/generate",
   apiKey: "",
   model: "llama3.2",
+};
+
+const ANTHROPIC_PROVIDER_DRAFT: ProviderDraft = {
+  kind: ANTHROPIC_PROVIDER_KIND,
+  name: "Anthropic",
+  endpoint: "https://api.anthropic.com/v1/messages",
+  apiKey: "",
+  model: "claude-sonnet-4-20250514",
+};
+
+const LLAMA_CPP_PROVIDER_DRAFT: ProviderDraft = {
+  kind: LLAMA_CPP_PROVIDER_KIND,
+  name: "llama.cpp",
+  endpoint: "http://127.0.0.1:8080/v1/chat/completions",
+  apiKey: "",
+  model: "local-llama",
 };
 
 function providerKindLabel(kind: ProviderKind) {
@@ -465,6 +485,21 @@ function App() {
     }));
   }
 
+  function applyAnthropicPreset() {
+    setProviderDraft((current) => ({
+      ...current,
+      ...ANTHROPIC_PROVIDER_DRAFT,
+      name:
+        current.name.trim() && current.kind === ANTHROPIC_PROVIDER_KIND
+          ? current.name
+          : ANTHROPIC_PROVIDER_DRAFT.name,
+      model:
+        current.model.trim() && current.kind === ANTHROPIC_PROVIDER_KIND
+          ? current.model
+          : ANTHROPIC_PROVIDER_DRAFT.model,
+    }));
+  }
+
   function applyOllamaPreset() {
     setProviderDraft((current) => ({
       ...current,
@@ -474,6 +509,21 @@ function App() {
         current.model.trim() && current.kind === OLLAMA_PROVIDER_KIND
           ? current.model
           : OLLAMA_PROVIDER_DRAFT.model,
+    }));
+  }
+
+  function applyLlamaCppPreset() {
+    setProviderDraft((current) => ({
+      ...current,
+      ...LLAMA_CPP_PROVIDER_DRAFT,
+      name:
+        current.name.trim() && current.kind === LLAMA_CPP_PROVIDER_KIND
+          ? current.name
+          : LLAMA_CPP_PROVIDER_DRAFT.name,
+      model:
+        current.model.trim() && current.kind === LLAMA_CPP_PROVIDER_KIND
+          ? current.model
+          : LLAMA_CPP_PROVIDER_DRAFT.model,
     }));
   }
 
@@ -494,7 +544,9 @@ function App() {
     });
     setProviderStatus({
       tone: "neutral",
-      message: `Editing ${provider.name}. Leave API key blank to keep the stored secret.`,
+      message: providerRequiresApiKey(provider.kind)
+        ? `Editing ${provider.name}. Leave API key blank to keep the stored secret.`
+        : `Editing ${provider.name}. This provider does not use an API key.`,
     });
   }
 
@@ -917,7 +969,7 @@ function App() {
             </p>
           ) : null}
         </div>
-        <span className="phase">Phase 3 Providers</span>
+        <span className="phase">Phase 3 Complete</span>
       </header>
 
       <section className="composer">
@@ -930,7 +982,9 @@ function App() {
         <p className="helper">
           Provider metadata stays in PilotBell storage. API keys are saved separately in the
           OS credential store through Rust/Tauri. The adapter path is now keyed by provider
-          type, starting with {providerKindLabel(DEFAULT_PROVIDER_KIND)}.
+          type, including {providerKindLabel(DEFAULT_PROVIDER_KIND)},{" "}
+          {providerKindLabel(ANTHROPIC_PROVIDER_KIND)}, {providerKindLabel(OLLAMA_PROVIDER_KIND)},
+          and {providerKindLabel(LLAMA_CPP_PROVIDER_KIND)}.
         </p>
         <div className="grid">
           <select
@@ -996,8 +1050,22 @@ function App() {
           <button type="button" onClick={applyOpenAIPreset} disabled={isProviderActionsDisabled}>
             Use OpenAI preset
           </button>
+          <button
+            type="button"
+            onClick={applyAnthropicPreset}
+            disabled={isProviderActionsDisabled}
+          >
+            Use Anthropic preset
+          </button>
           <button type="button" onClick={applyOllamaPreset} disabled={isProviderActionsDisabled}>
             Use Ollama preset
+          </button>
+          <button
+            type="button"
+            onClick={applyLlamaCppPreset}
+            disabled={isProviderActionsDisabled}
+          >
+            Use llama.cpp preset
           </button>
           <button
             type="button"

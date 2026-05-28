@@ -2,7 +2,7 @@
 
 PilotBell is a lightweight desktop AI command palette built with Tauri v2, Rust, React, and TypeScript.
 
-The project is currently in an early MVP stage. The current milestone includes an open provider registration UI where anyone using the app can add an AI endpoint and call that provider directly from the prompt screen.
+The current milestone includes an open provider registration UI where anyone using the app can add an AI endpoint and call that provider directly from the prompt screen.
 
 ## Current Scope
 
@@ -19,9 +19,10 @@ The project is currently in an early MVP stage. The current milestone includes a
 - Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
 - Provider adapter foundation for request validation, health checks, payload building, and response parsing
-- Ollama adapter for local `/api/generate` providers without API-key storage
+- OpenAI Responses and Anthropic Messages adapters for hosted HTTPS providers with OS-stored API keys
+- Ollama and llama.cpp adapters for local HTTP providers without API-key storage
 
-Planned next steps include Anthropic and llama.cpp-compatible adapters plus optional local knowledge-base integrations.
+Planned next steps focus on optional local knowledge-base integrations.
 
 ## Setup
 
@@ -104,5 +105,4 @@ cargo check
 
 ## Next Phase Hooks
 
-- Phase 3: add adapters for Anthropic, Ollama, and llama.cpp on top of the shared Rust provider interface.
 - Phase 4: add local source registration, indexing, and retrieval-backed prompt context.

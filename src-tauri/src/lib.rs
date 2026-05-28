@@ -11,7 +11,10 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const PROVIDER_SECRET_SERVICE: &str = "io.github.fouri7.pilotbell.provider";
 const OPENAI_RESPONSES_KIND: &str = "openai-responses";
+const ANTHROPIC_MESSAGES_KIND: &str = "anthropic-messages";
 const OLLAMA_KIND: &str = "ollama";
+const LLAMA_CPP_KIND: &str = "llama-cpp";
+const ANTHROPIC_VERSION_HEADER: &str = "2023-06-01";
 const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
 const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
 const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
@@ -60,10 +63,24 @@ struct ResponseContent {
     text: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct AnthropicResponseEnvelope {
+    content: Option<Vec<AnthropicContentItem>>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentItem {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: Option<String>,
+}
+
 #[derive(Clone, Copy)]
 enum ProviderKind {
     OpenAiResponses,
+    AnthropicMessages,
     Ollama,
+    LlamaCpp,
 }
 
 #[derive(Debug)]
@@ -72,6 +89,7 @@ struct ProviderAdapter {
     requires_secret: bool,
     validate: fn(&ProviderConfig) -> Result<(), ProviderCommandError>,
     build_payload: fn(&ProviderConfig, &str) -> Value,
+    prepare_request: fn(reqwest::RequestBuilder, Option<&str>) -> reqwest::RequestBuilder,
     parse_response: fn(&str, Value) -> Result<String, ProviderCommandError>,
 }
 
@@ -160,7 +178,9 @@ impl ProviderCommandError {
 fn parse_provider_kind(kind: &str) -> Result<ProviderKind, ProviderCommandError> {
     match kind.trim() {
         OPENAI_RESPONSES_KIND => Ok(ProviderKind::OpenAiResponses),
+        ANTHROPIC_MESSAGES_KIND => Ok(ProviderKind::AnthropicMessages),
         OLLAMA_KIND => Ok(ProviderKind::Ollama),
+        LLAMA_CPP_KIND => Ok(ProviderKind::LlamaCpp),
         "" => Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
             "Provider type is missing.",
@@ -181,14 +201,32 @@ fn provider_adapter(kind: ProviderKind) -> ProviderAdapter {
             requires_secret: true,
             validate: validate_openai_responses_provider,
             build_payload: build_openai_responses_payload,
+            prepare_request: prepare_bearer_request,
             parse_response: parse_openai_responses_output,
+        },
+        ProviderKind::AnthropicMessages => ProviderAdapter {
+            healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
+            requires_secret: true,
+            validate: validate_anthropic_messages_provider,
+            build_payload: build_anthropic_messages_payload,
+            prepare_request: prepare_anthropic_request,
+            parse_response: parse_anthropic_messages_output,
         },
         ProviderKind::Ollama => ProviderAdapter {
             healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
             requires_secret: false,
             validate: validate_ollama_provider,
             build_payload: build_ollama_generate_payload,
+            prepare_request: prepare_local_request,
             parse_response: parse_ollama_generate_output,
+        },
+        ProviderKind::LlamaCpp => ProviderAdapter {
+            healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
+            requires_secret: false,
+            validate: validate_llama_cpp_provider,
+            build_payload: build_llama_cpp_chat_payload,
+            prepare_request: prepare_local_request,
+            parse_response: parse_llama_cpp_chat_output,
         },
     }
 }
@@ -241,11 +279,37 @@ fn validate_openai_responses_provider(
     Ok(())
 }
 
+fn validate_anthropic_messages_provider(
+    provider: &ProviderConfig,
+) -> Result<(), ProviderCommandError> {
+    if !provider.endpoint.starts_with("https://") {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Anthropic endpoint must start with https://",
+            false,
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_ollama_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
     if !(provider.endpoint.starts_with("http://") || provider.endpoint.starts_with("https://")) {
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
             "Ollama endpoint must start with http:// or https://",
+            false,
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_llama_cpp_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
+    if !(provider.endpoint.starts_with("http://") || provider.endpoint.starts_with("https://")) {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "llama.cpp endpoint must start with http:// or https://",
             false,
         ));
     }
@@ -325,10 +389,36 @@ fn build_openai_responses_payload(provider: &ProviderConfig, prompt: &str) -> Va
     })
 }
 
+fn build_anthropic_messages_payload(provider: &ProviderConfig, prompt: &str) -> Value {
+    json!({
+        "model": provider.model,
+        "max_tokens": 1024,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+    })
+}
+
 fn build_ollama_generate_payload(provider: &ProviderConfig, prompt: &str) -> Value {
     json!({
         "model": provider.model,
         "prompt": prompt,
+        "stream": false,
+    })
+}
+
+fn build_llama_cpp_chat_payload(provider: &ProviderConfig, prompt: &str) -> Value {
+    json!({
+        "model": provider.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
         "stream": false,
     })
 }
@@ -386,6 +476,49 @@ fn parse_openai_responses_output(raw: &str, parsed: Value) -> Result<String, Pro
     })
 }
 
+fn parse_anthropic_messages_output(
+    raw: &str,
+    parsed: Value,
+) -> Result<String, ProviderCommandError> {
+    let parsed = serde_json::from_value::<AnthropicResponseEnvelope>(parsed).map_err(|_| {
+        let details = preview_text(raw)
+            .map(Cow::Owned)
+            .unwrap_or_else(|| Cow::Borrowed("Response body could not be parsed as JSON."));
+        ProviderCommandError::new(
+            ProviderErrorKind::ResponseFormat,
+            "Unexpected Anthropic Messages response format.",
+            false,
+        )
+        .with_details(details)
+    })?;
+
+    let text = parsed
+        .content
+        .as_ref()
+        .into_iter()
+        .flatten()
+        .filter(|item| item.content_type == "text")
+        .filter_map(|item| item.text.as_ref())
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if text.is_empty() {
+        let details = preview_text(raw)
+            .map(Cow::Owned)
+            .unwrap_or_else(|| Cow::Borrowed("Response contained no text content."));
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::ResponseFormat,
+            "No text content was found in the Anthropic response.",
+            false,
+        )
+        .with_details(details));
+    }
+
+    Ok(text)
+}
+
 fn parse_ollama_generate_output(raw: &str, parsed: Value) -> Result<String, ProviderCommandError> {
     if let Some(message) = parsed.get("error").and_then(Value::as_str) {
         if !message.trim().is_empty() {
@@ -414,6 +547,76 @@ fn parse_ollama_generate_output(raw: &str, parsed: Value) -> Result<String, Prov
             )
             .with_details(details)
         })
+}
+
+fn parse_llama_cpp_chat_output(raw: &str, parsed: Value) -> Result<String, ProviderCommandError> {
+    if let Some(message) = parsed.get("error").and_then(Value::as_str) {
+        if !message.trim().is_empty() {
+            return Err(ProviderCommandError::new(
+                ProviderErrorKind::Provider,
+                format!("llama.cpp error: {}", message.trim()),
+                false,
+            ));
+        }
+    }
+
+    let content = parsed
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .or_else(|| choice.get("text"))
+        })
+        .and_then(Value::as_str)
+        .or_else(|| parsed.get("content").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+
+    content.ok_or_else(|| {
+        let details = preview_text(raw)
+            .map(Cow::Owned)
+            .unwrap_or_else(|| Cow::Borrowed("Response contained no generated text."));
+        ProviderCommandError::new(
+            ProviderErrorKind::ResponseFormat,
+            "No generated text was found in the llama.cpp response.",
+            false,
+        )
+        .with_details(details)
+    })
+}
+
+fn prepare_bearer_request(
+    request: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    if let Some(api_key) = api_key {
+        request.header(AUTHORIZATION, format!("Bearer {api_key}"))
+    } else {
+        request
+    }
+}
+
+fn prepare_anthropic_request(
+    request: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let request = request.header("anthropic-version", ANTHROPIC_VERSION_HEADER);
+    if let Some(api_key) = api_key {
+        request.header("x-api-key", api_key)
+    } else {
+        request
+    }
+}
+
+fn prepare_local_request(
+    request: reqwest::RequestBuilder,
+    _api_key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    request
 }
 
 fn provider_error_message(parsed: &Value) -> Option<String> {
@@ -468,9 +671,7 @@ async fn call_provider(
         .header(CONTENT_TYPE, "application/json")
         .json(&payload);
 
-    if let Some(api_key) = api_key {
-        request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
-    }
+    request = (adapter.prepare_request)(request, api_key.as_deref());
 
     let response = request.send().await.map_err(|error| {
         if error.is_timeout() {
@@ -815,6 +1016,28 @@ mod tests {
         }
     }
 
+    fn sample_anthropic_provider() -> ProviderConfig {
+        ProviderConfig {
+            id: "provider-anthropic".into(),
+            kind: ANTHROPIC_MESSAGES_KIND.into(),
+            name: "Anthropic".into(),
+            endpoint: "https://api.anthropic.com/v1/messages".into(),
+            model: "claude-sonnet-4-20250514".into(),
+            has_secret: true,
+        }
+    }
+
+    fn sample_llama_cpp_provider() -> ProviderConfig {
+        ProviderConfig {
+            id: "provider-llama".into(),
+            kind: LLAMA_CPP_KIND.into(),
+            name: "llama.cpp".into(),
+            endpoint: "http://127.0.0.1:8080/v1/chat/completions".into(),
+            model: "local-llama".into(),
+            has_secret: false,
+        }
+    }
+
     #[test]
     fn validate_provider_accepts_openai_responses_shape() {
         assert!(validate_provider(&sample_provider()).is_ok());
@@ -846,6 +1069,16 @@ mod tests {
     }
 
     #[test]
+    fn validate_provider_accepts_anthropic_with_secret() {
+        assert!(validate_provider(&sample_anthropic_provider()).is_ok());
+    }
+
+    #[test]
+    fn validate_provider_accepts_llama_cpp_without_secret() {
+        assert!(validate_provider(&sample_llama_cpp_provider()).is_ok());
+    }
+
+    #[test]
     fn build_ollama_payload_disables_streaming() {
         let provider = sample_ollama_provider();
         let payload = build_ollama_generate_payload(&provider, "hello");
@@ -862,6 +1095,28 @@ mod tests {
 
         assert_eq!(payload["model"], "gpt-5.4-mini");
         assert_eq!(payload["input"], "hello");
+    }
+
+    #[test]
+    fn build_anthropic_payload_uses_messages_shape() {
+        let provider = sample_anthropic_provider();
+        let payload = build_anthropic_messages_payload(&provider, "hello");
+
+        assert_eq!(payload["model"], "claude-sonnet-4-20250514");
+        assert_eq!(payload["messages"][0]["role"], "user");
+        assert_eq!(payload["messages"][0]["content"], "hello");
+        assert_eq!(payload["max_tokens"], 1024);
+    }
+
+    #[test]
+    fn build_llama_cpp_payload_uses_chat_completions_shape() {
+        let provider = sample_llama_cpp_provider();
+        let payload = build_llama_cpp_chat_payload(&provider, "hello");
+
+        assert_eq!(payload["model"], "local-llama");
+        assert_eq!(payload["messages"][0]["role"], "user");
+        assert_eq!(payload["messages"][0]["content"], "hello");
+        assert_eq!(payload["stream"], false);
     }
 
     #[test]
@@ -908,11 +1163,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_anthropic_response_extracts_text_content() {
+        let raw = r#"{
+            "content": [
+                { "type": "text", "text": "first" },
+                { "type": "text", "text": "second" }
+            ]
+        }"#;
+
+        let parsed: Value = serde_json::from_str(raw).expect("response should parse");
+        let text =
+            parse_anthropic_messages_output(raw, parsed).expect("text content should be extracted");
+
+        assert_eq!(text, "first\n\nsecond");
+    }
+
+    #[test]
     fn parse_ollama_response_extracts_generated_text() {
         let raw = r#"{ "model": "llama3.2", "response": "local answer", "done": true }"#;
         let parsed: Value = serde_json::from_str(raw).expect("response should parse");
         let text =
             parse_ollama_generate_output(raw, parsed).expect("generated text should be extracted");
+
+        assert_eq!(text, "local answer");
+    }
+
+    #[test]
+    fn parse_llama_cpp_response_extracts_generated_text() {
+        let raw = r#"{
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "local answer"
+                    }
+                }
+            ]
+        }"#;
+        let parsed: Value = serde_json::from_str(raw).expect("response should parse");
+        let text =
+            parse_llama_cpp_chat_output(raw, parsed).expect("generated text should be extracted");
 
         assert_eq!(text, "local answer");
     }
