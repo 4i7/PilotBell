@@ -2,6 +2,11 @@ export const DEFAULT_PROVIDER_KIND = "openai-responses" as const;
 
 export type ProviderKind = typeof DEFAULT_PROVIDER_KIND;
 
+export type ProviderCapability = {
+  label: string;
+  detail: string;
+};
+
 export type ProviderConfig = {
   id: string;
   kind: ProviderKind;
@@ -43,6 +48,34 @@ export function normalizeProviderDraft(draft: ProviderDraft): ProviderDraft {
   };
 }
 
-export function isProviderDraftValid(draft: ProviderDraft) {
-  return Boolean(draft.name && draft.endpoint && draft.apiKey && draft.model);
+export function isProviderDraftValid(
+  draft: ProviderDraft,
+  options: { requireApiKey?: boolean } = { requireApiKey: true },
+) {
+  return Boolean(
+    draft.name &&
+      draft.endpoint &&
+      draft.model &&
+      (options.requireApiKey === false || draft.apiKey),
+  );
+}
+
+export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[] {
+  switch (kind) {
+    case DEFAULT_PROVIDER_KIND:
+      return [
+        {
+          label: "Hosted",
+          detail: "Calls a remote HTTPS endpoint from the Tauri backend.",
+        },
+        {
+          label: "Secure key",
+          detail: "Requires an API key stored in the OS credential store.",
+        },
+        {
+          label: "Responses API",
+          detail: "Uses the OpenAI Responses request and response shape.",
+        },
+      ];
+  }
 }

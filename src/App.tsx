@@ -7,6 +7,7 @@ import {
   type ProviderConfig,
   type ProviderDraft,
   type ProviderKind,
+  getProviderCapabilities,
   isProviderDraftValid,
   makeProviderId,
   normalizeProviderDraft,
@@ -99,6 +100,14 @@ function hasTauriRuntime() {
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
 ];
+
+const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
+  kind: DEFAULT_PROVIDER_KIND,
+  name: "OpenAI",
+  endpoint: "https://api.openai.com/v1/responses",
+  apiKey: "",
+  model: "gpt-5.4-mini",
+};
 
 function providerKindLabel(kind: ProviderKind) {
   return PROVIDER_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
@@ -197,22 +206,24 @@ function App() {
 
   const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
   const [selectedProviderId, setSelectedProviderId] = useState("");
-  const [providerDraft, setProviderDraft] = useState<ProviderDraft>({
-    kind: DEFAULT_PROVIDER_KIND,
-    name: "OpenAI",
-    endpoint: "https://api.openai.com/v1/responses",
-    apiKey: "",
-    model: "gpt-5.4-mini",
-  });
+  const [editingProviderId, setEditingProviderId] = useState("");
+  const [providerDraft, setProviderDraft] = useState<ProviderDraft>({ ...DEFAULT_PROVIDER_DRAFT });
 
   const selectedProvider = useMemo(
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
+  const editingProvider = useMemo(
+    () => providers.find((provider) => provider.id === editingProviderId) ?? null,
+    [providers, editingProviderId],
+  );
   const latestSessionEntry = sessionEntries[0] ?? null;
   const selectedProviderHealth = selectedProvider
     ? providerHealthRecords[selectedProvider.id] ?? null
     : null;
+  const selectedProviderCapabilities = selectedProvider
+    ? getProviderCapabilities(selectedProvider.kind)
+    : [];
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -442,6 +453,35 @@ function App() {
     }));
   }
 
+  function resetProviderDraft() {
+    setEditingProviderId("");
+    setProviderDraft({ ...DEFAULT_PROVIDER_DRAFT });
+  }
+
+  function beginEditProvider(provider: ProviderConfig) {
+    setSelectedProviderId(provider.id);
+    setEditingProviderId(provider.id);
+    setProviderDraft({
+      kind: provider.kind,
+      name: provider.name,
+      endpoint: provider.endpoint,
+      apiKey: "",
+      model: provider.model,
+    });
+    setProviderStatus({
+      tone: "neutral",
+      message: `Editing ${provider.name}. Leave API key blank to keep the stored secret.`,
+    });
+  }
+
+  function cancelProviderEdit() {
+    resetProviderDraft();
+    setProviderStatus({
+      tone: "neutral",
+      message: "Provider editing cancelled.",
+    });
+  }
+
   async function addProvider() {
     if (!isTauriRuntime) {
       setProviderStatus({
@@ -488,13 +528,94 @@ function App() {
       const next = [...providers, nextProvider];
       persistProviders(next);
       setSelectedProviderId(nextProvider.id);
-      setProviderDraft({
-        ...normalized,
-        apiKey: "",
-      });
+      setProviderDraft({ ...DEFAULT_PROVIDER_DRAFT });
       setProviderStatus({
         tone: "success",
         message: `Saved ${nextProvider.name}. Metadata stays in PilotBell, and the API key now lives in the OS credential store.`,
+      });
+    } catch (err) {
+      setProviderStatus({
+        tone: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsSavingProvider(false);
+    }
+  }
+
+  async function updateProvider() {
+    if (!isTauriRuntime) {
+      setProviderStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      return;
+    }
+
+    if (!editingProvider) {
+      setProviderStatus({
+        tone: "warning",
+        message: "Select a provider before editing.",
+      });
+      return;
+    }
+
+    const normalized = normalizeProviderDraft(providerDraft);
+    if (!isProviderDraftValid(normalized, { requireApiKey: false })) {
+      setProviderStatus({
+        tone: "warning",
+        message: "Provider update failed: type, name, endpoint, and model are required.",
+      });
+      return;
+    }
+
+    if (!editingProvider.hasSecret && !normalized.apiKey) {
+      setProviderStatus({
+        tone: "warning",
+        message: "Provider update failed: API key is required because no stored secret exists.",
+      });
+      return;
+    }
+
+    const nextProvider: ProviderConfig = {
+      id: editingProvider.id,
+      kind: normalized.kind,
+      name: normalized.name,
+      endpoint: normalized.endpoint,
+      model: normalized.model,
+      hasSecret: editingProvider.hasSecret || Boolean(normalized.apiKey),
+    };
+
+    setIsSavingProvider(true);
+    setProviderStatus({
+      tone: "neutral",
+      message: `Updating ${nextProvider.name}...`,
+    });
+
+    try {
+      if (normalized.apiKey) {
+        const secretResult = await storeProviderSecret(nextProvider.id, normalized.apiKey);
+        if (secretResult.status === "error") {
+          setProviderStatus({
+            tone: toneForProviderError(secretResult.error),
+            message: secretResult.error.message,
+          });
+          return;
+        }
+      }
+
+      const next = providers.map((provider) =>
+        provider.id === nextProvider.id ? nextProvider : provider,
+      );
+      persistProviders(next);
+      setSelectedProviderId(nextProvider.id);
+      removeProviderHealthRecord(nextProvider.id);
+      resetProviderDraft();
+      setProviderStatus({
+        tone: "success",
+        message: normalized.apiKey
+          ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
+          : `Updated ${nextProvider.name}. Stored API key was kept. Run Test API to refresh readiness.`,
       });
     } catch (err) {
       setProviderStatus({
@@ -532,6 +653,9 @@ function App() {
       removeProviderHealthRecord(id);
       if (selectedProviderId === id) {
         setSelectedProviderId("");
+      }
+      if (editingProviderId === id) {
+        resetProviderDraft();
       }
       setProviderStatus({
         tone: "neutral",
@@ -744,11 +868,16 @@ function App() {
             </p>
           ) : null}
         </div>
-        <span className="phase">Phase 3 Readiness</span>
+        <span className="phase">Phase 3 Providers</span>
       </header>
 
       <section className="composer">
-        <div className="section-title">Provider settings</div>
+        <div className="section-heading">
+          <div className="section-title">Provider settings</div>
+          <span className="status">
+            {editingProvider ? `Editing ${editingProvider.name}` : "New provider"}
+          </span>
+        </div>
         <p className="helper">
           Provider metadata stays in PilotBell storage. API keys are saved separately in the
           OS credential store through Rust/Tauri. The adapter path is now keyed by provider
@@ -797,8 +926,15 @@ function App() {
             onChange={(event) =>
               setProviderDraft({ ...providerDraft, apiKey: event.currentTarget.value })
             }
-            placeholder="API key"
+            placeholder={editingProvider ? "New API key (optional)" : "API key"}
           />
+        </div>
+        <div className="capability-list" aria-label="Provider capabilities">
+          {getProviderCapabilities(providerDraft.kind).map((capability) => (
+            <span key={capability.label} className="capability" title={capability.detail}>
+              {capability.label}
+            </span>
+          ))}
         </div>
         <div className="actions">
           <button type="button" onClick={applyOpenAIPreset} disabled={isProviderActionsDisabled}>
@@ -806,11 +942,29 @@ function App() {
           </button>
           <button
             type="button"
-            onClick={() => void addProvider()}
+            onClick={() =>
+              editingProvider ? void updateProvider() : void addProvider()
+            }
             disabled={!isTauriRuntime || isProviderActionsDisabled}
           >
-            {isSavingProvider ? "Saving..." : "Save provider"}
+            {isSavingProvider
+              ? editingProvider
+                ? "Updating..."
+                : "Saving..."
+              : editingProvider
+                ? "Update provider"
+                : "Save provider"}
           </button>
+          {editingProvider ? (
+            <button
+              type="button"
+              className="secondary"
+              onClick={cancelProviderEdit}
+              disabled={isProviderActionsDisabled}
+            >
+              Cancel edit
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => void testProvider()}
@@ -849,6 +1003,14 @@ function App() {
                     <span className={`readiness readiness-${readiness}`}>
                       {readinessLabel(readiness)}
                     </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => beginEditProvider(provider)}
+                    disabled={!isTauriRuntime || isProviderActionsDisabled}
+                  >
+                    Edit
                   </button>
                   <button
                     type="button"
@@ -912,35 +1074,44 @@ function App() {
 
       <section className="health-panel">
         <div className="section-heading">
-          <div className="section-title">Provider readiness</div>
+          <div className="section-title">Provider readiness and capabilities</div>
           <span className="status">
             {selectedProvider ? selectedProvider.name : "No provider selected"}
           </span>
         </div>
         {selectedProvider ? (
-          selectedProviderHealth ? (
-            <div className="health-detail">
-              <span className={`readiness readiness-${selectedProviderHealth.readiness}`}>
-                {readinessLabel(selectedProviderHealth.readiness)}
-              </span>
-              <span>{selectedProviderHealth.message}</span>
-              <span className="status">
-                Checked {formatRelativeTime(selectedProviderHealth.checkedAt)}
-                {selectedProviderHealth.latencyMs
-                  ? ` / ${selectedProviderHealth.latencyMs} ms`
-                  : ""}
-                {selectedProviderHealth.errorKind
-                  ? ` / ${selectedProviderHealth.errorKind}`
-                  : ""}
-                {selectedProviderHealth.statusCode
-                  ? ` / HTTP ${selectedProviderHealth.statusCode}`
-                  : ""}
-                {selectedProviderHealth.retryable ? " / retryable" : ""}
-              </span>
+          <div className="health-stack">
+            <div className="capability-list">
+              {selectedProviderCapabilities.map((capability) => (
+                <span key={capability.label} className="capability" title={capability.detail}>
+                  {capability.label}
+                </span>
+              ))}
             </div>
-          ) : (
-            <p className="empty">Run Test API to record readiness for this provider.</p>
-          )
+            {selectedProviderHealth ? (
+              <div className="health-detail">
+                <span className={`readiness readiness-${selectedProviderHealth.readiness}`}>
+                  {readinessLabel(selectedProviderHealth.readiness)}
+                </span>
+                <span>{selectedProviderHealth.message}</span>
+                <span className="status">
+                  Checked {formatRelativeTime(selectedProviderHealth.checkedAt)}
+                  {selectedProviderHealth.latencyMs
+                    ? ` / ${selectedProviderHealth.latencyMs} ms`
+                    : ""}
+                  {selectedProviderHealth.errorKind
+                    ? ` / ${selectedProviderHealth.errorKind}`
+                    : ""}
+                  {selectedProviderHealth.statusCode
+                    ? ` / HTTP ${selectedProviderHealth.statusCode}`
+                    : ""}
+                  {selectedProviderHealth.retryable ? " / retryable" : ""}
+                </span>
+              </div>
+            ) : (
+              <p className="empty">Run Test API to record readiness for this provider.</p>
+            )}
+          </div>
         ) : (
           <p className="empty">Select a provider to inspect readiness.</p>
         )}
