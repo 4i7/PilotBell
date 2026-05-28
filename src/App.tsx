@@ -679,7 +679,7 @@ function App() {
     setProviderStatus({
       tone: "neutral",
       message: providerRequiresApiKey(provider.kind)
-        ? `Editing ${provider.name}. Leave API key blank to keep the stored secret.`
+        ? `Editing ${provider.name}. Leave API key blank to keep the stored secret when the provider type stays the same.`
         : `Editing ${provider.name}. This provider does not use an API key.`,
     });
   }
@@ -781,6 +781,10 @@ function App() {
 
     const normalized = normalizeProviderDraft(providerDraft);
     const requiresApiKey = providerRequiresApiKey(normalized.kind);
+    const hostedProviderKindChanged =
+      editingProvider.kind !== normalized.kind &&
+      providerRequiresApiKey(editingProvider.kind) &&
+      requiresApiKey;
     if (!isProviderDraftValid(normalized, { requireApiKey: false })) {
       setProviderStatus({
         tone: "warning",
@@ -797,6 +801,14 @@ function App() {
       return;
     }
 
+    if (hostedProviderKindChanged && !normalized.apiKey) {
+      setProviderStatus({
+        tone: "warning",
+        message: "Provider update failed: switching hosted provider types requires a new API key.",
+      });
+      return;
+    }
+
     const nextProvider: ProviderConfig = {
       id: editingProvider.id,
       kind: normalized.kind,
@@ -804,7 +816,9 @@ function App() {
       endpoint: normalized.endpoint,
       model: normalized.model,
       hasSecret: requiresApiKey
-        ? editingProvider.hasSecret || Boolean(normalized.apiKey)
+        ? hostedProviderKindChanged
+          ? Boolean(normalized.apiKey)
+          : editingProvider.hasSecret || Boolean(normalized.apiKey)
         : false,
     };
 
@@ -844,14 +858,16 @@ function App() {
       setSelectedProviderId(nextProvider.id);
       removeProviderHealthRecord(nextProvider.id);
       resetProviderDraft();
-      setProviderStatus({
-        tone: "success",
-        message: !requiresApiKey
-          ? `Updated ${nextProvider.name}. No API key is required for this provider. Run Test API to refresh readiness.`
-          : normalized.apiKey
-            ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
-            : `Updated ${nextProvider.name}. Stored API key was kept. Run Test API to refresh readiness.`,
-      });
+        setProviderStatus({
+          tone: "success",
+          message: !requiresApiKey
+            ? `Updated ${nextProvider.name}. No API key is required for this provider. Run Test API to refresh readiness.`
+            : hostedProviderKindChanged
+              ? `Updated ${nextProvider.name} and stored a new API key for the new provider type. Run Test API to refresh readiness.`
+              : normalized.apiKey
+              ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
+              : `Updated ${nextProvider.name}. Stored API key was kept. Run Test API to refresh readiness.`,
+        });
     } catch (err) {
       setProviderStatus({
         tone: "error",
