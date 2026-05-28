@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   DEFAULT_PROVIDER_KIND,
+  OLLAMA_PROVIDER_KIND,
   type ProviderConfig,
   type ProviderDraft,
   type ProviderKind,
@@ -11,6 +12,7 @@ import {
   isProviderDraftValid,
   makeProviderId,
   normalizeProviderDraft,
+  providerRequiresApiKey,
 } from "./domain/provider";
 import { loadProviderState, saveProviders } from "./lib/providerStore";
 import {
@@ -99,6 +101,7 @@ function hasTauriRuntime() {
 
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
+  { value: OLLAMA_PROVIDER_KIND, label: "Ollama" },
 ];
 
 const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
@@ -107,6 +110,14 @@ const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
   endpoint: "https://api.openai.com/v1/responses",
   apiKey: "",
   model: "gpt-5.4-mini",
+};
+
+const OLLAMA_PROVIDER_DRAFT: ProviderDraft = {
+  kind: OLLAMA_PROVIDER_KIND,
+  name: "Ollama",
+  endpoint: "http://127.0.0.1:11434/api/generate",
+  apiKey: "",
+  model: "llama3.2",
 };
 
 function providerKindLabel(kind: ProviderKind) {
@@ -224,6 +235,7 @@ function App() {
   const selectedProviderCapabilities = selectedProvider
     ? getProviderCapabilities(selectedProvider.kind)
     : [];
+  const providerDraftRequiresApiKey = providerRequiresApiKey(providerDraft.kind);
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -453,6 +465,18 @@ function App() {
     }));
   }
 
+  function applyOllamaPreset() {
+    setProviderDraft((current) => ({
+      ...current,
+      ...OLLAMA_PROVIDER_DRAFT,
+      name: current.name.trim() && current.kind === OLLAMA_PROVIDER_KIND ? current.name : "Ollama",
+      model:
+        current.model.trim() && current.kind === OLLAMA_PROVIDER_KIND
+          ? current.model
+          : OLLAMA_PROVIDER_DRAFT.model,
+    }));
+  }
+
   function resetProviderDraft() {
     setEditingProviderId("");
     setProviderDraft({ ...DEFAULT_PROVIDER_DRAFT });
@@ -492,10 +516,13 @@ function App() {
     }
 
     const normalized = normalizeProviderDraft(providerDraft);
-    if (!isProviderDraftValid(normalized)) {
+    const requiresApiKey = providerRequiresApiKey(normalized.kind);
+    if (!isProviderDraftValid(normalized, { requireApiKey: requiresApiKey })) {
       setProviderStatus({
         tone: "warning",
-        message: "Provider registration failed: all fields are required.",
+        message: requiresApiKey
+          ? "Provider registration failed: all fields are required."
+          : "Provider registration failed: type, name, endpoint, and model are required.",
       });
       return;
     }
@@ -506,23 +533,27 @@ function App() {
       name: normalized.name,
       endpoint: normalized.endpoint,
       model: normalized.model,
-      hasSecret: true,
+      hasSecret: requiresApiKey,
     };
 
     setIsSavingProvider(true);
     setProviderStatus({
       tone: "neutral",
-      message: `Saving ${nextProvider.name} into the OS credential store...`,
+      message: requiresApiKey
+        ? `Saving ${nextProvider.name} into the OS credential store...`
+        : `Saving ${nextProvider.name} as a local provider...`,
     });
 
     try {
-      const secretResult = await storeProviderSecret(nextProvider.id, normalized.apiKey);
-      if (secretResult.status === "error") {
-        setProviderStatus({
-          tone: toneForProviderError(secretResult.error),
-          message: secretResult.error.message,
-        });
-        return;
+      if (requiresApiKey) {
+        const secretResult = await storeProviderSecret(nextProvider.id, normalized.apiKey);
+        if (secretResult.status === "error") {
+          setProviderStatus({
+            tone: toneForProviderError(secretResult.error),
+            message: secretResult.error.message,
+          });
+          return;
+        }
       }
 
       const next = [...providers, nextProvider];
@@ -531,7 +562,9 @@ function App() {
       setProviderDraft({ ...DEFAULT_PROVIDER_DRAFT });
       setProviderStatus({
         tone: "success",
-        message: `Saved ${nextProvider.name}. Metadata stays in PilotBell, and the API key now lives in the OS credential store.`,
+        message: requiresApiKey
+          ? `Saved ${nextProvider.name}. Metadata stays in PilotBell, and the API key now lives in the OS credential store.`
+          : `Saved ${nextProvider.name}. Local provider metadata stays in PilotBell; no API key was stored.`,
       });
     } catch (err) {
       setProviderStatus({
@@ -561,6 +594,7 @@ function App() {
     }
 
     const normalized = normalizeProviderDraft(providerDraft);
+    const requiresApiKey = providerRequiresApiKey(normalized.kind);
     if (!isProviderDraftValid(normalized, { requireApiKey: false })) {
       setProviderStatus({
         tone: "warning",
@@ -569,7 +603,7 @@ function App() {
       return;
     }
 
-    if (!editingProvider.hasSecret && !normalized.apiKey) {
+    if (requiresApiKey && !editingProvider.hasSecret && !normalized.apiKey) {
       setProviderStatus({
         tone: "warning",
         message: "Provider update failed: API key is required because no stored secret exists.",
@@ -583,7 +617,9 @@ function App() {
       name: normalized.name,
       endpoint: normalized.endpoint,
       model: normalized.model,
-      hasSecret: editingProvider.hasSecret || Boolean(normalized.apiKey),
+      hasSecret: requiresApiKey
+        ? editingProvider.hasSecret || Boolean(normalized.apiKey)
+        : false,
     };
 
     setIsSavingProvider(true);
@@ -593,12 +629,23 @@ function App() {
     });
 
     try {
-      if (normalized.apiKey) {
+      if (requiresApiKey && normalized.apiKey) {
         const secretResult = await storeProviderSecret(nextProvider.id, normalized.apiKey);
         if (secretResult.status === "error") {
           setProviderStatus({
             tone: toneForProviderError(secretResult.error),
             message: secretResult.error.message,
+          });
+          return;
+        }
+      }
+
+      if (!requiresApiKey && editingProvider.hasSecret) {
+        const deleteResult = await deleteProviderSecret(nextProvider.id);
+        if (deleteResult.status === "error") {
+          setProviderStatus({
+            tone: toneForProviderError(deleteResult.error),
+            message: deleteResult.error.message,
           });
           return;
         }
@@ -613,9 +660,11 @@ function App() {
       resetProviderDraft();
       setProviderStatus({
         tone: "success",
-        message: normalized.apiKey
-          ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
-          : `Updated ${nextProvider.name}. Stored API key was kept. Run Test API to refresh readiness.`,
+        message: !requiresApiKey
+          ? `Updated ${nextProvider.name}. No API key is required for this provider. Run Test API to refresh readiness.`
+          : normalized.apiKey
+            ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
+            : `Updated ${nextProvider.name}. Stored API key was kept. Run Test API to refresh readiness.`,
       });
     } catch (err) {
       setProviderStatus({
@@ -926,7 +975,14 @@ function App() {
             onChange={(event) =>
               setProviderDraft({ ...providerDraft, apiKey: event.currentTarget.value })
             }
-            placeholder={editingProvider ? "New API key (optional)" : "API key"}
+            placeholder={
+              providerDraftRequiresApiKey
+                ? editingProvider
+                  ? "New API key (optional)"
+                  : "API key"
+                : "API key not required"
+            }
+            disabled={!providerDraftRequiresApiKey}
           />
         </div>
         <div className="capability-list" aria-label="Provider capabilities">
@@ -939,6 +995,9 @@ function App() {
         <div className="actions">
           <button type="button" onClick={applyOpenAIPreset} disabled={isProviderActionsDisabled}>
             Use OpenAI preset
+          </button>
+          <button type="button" onClick={applyOllamaPreset} disabled={isProviderActionsDisabled}>
+            Use Ollama preset
           </button>
           <button
             type="button"

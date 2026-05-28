@@ -1,6 +1,7 @@
 export const DEFAULT_PROVIDER_KIND = "openai-responses" as const;
+export const OLLAMA_PROVIDER_KIND = "ollama" as const;
 
-export type ProviderKind = typeof DEFAULT_PROVIDER_KIND;
+export type ProviderKind = typeof DEFAULT_PROVIDER_KIND | typeof OLLAMA_PROVIDER_KIND;
 
 export type ProviderCapability = {
   label: string;
@@ -33,6 +34,14 @@ export type LegacyProviderConfig = {
   model: string;
   hasSecret?: boolean;
 };
+
+export function isProviderKind(value: unknown): value is ProviderKind {
+  return value === DEFAULT_PROVIDER_KIND || value === OLLAMA_PROVIDER_KIND;
+}
+
+export function providerRequiresApiKey(kind: ProviderKind) {
+  return kind === DEFAULT_PROVIDER_KIND;
+}
 
 export function makeProviderId() {
   return `provider-${crypto.randomUUID()}`;
@@ -75,6 +84,21 @@ export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[
         {
           label: "Responses API",
           detail: "Uses the OpenAI Responses request and response shape.",
+        },
+      ];
+    case OLLAMA_PROVIDER_KIND:
+      return [
+        {
+          label: "Local",
+          detail: "Calls a local Ollama server from the Tauri backend.",
+        },
+        {
+          label: "No API key",
+          detail: "Uses local HTTP without storing a provider secret.",
+        },
+        {
+          label: "Ollama generate",
+          detail: "Uses the /api/generate request and response shape.",
         },
       ];
   }

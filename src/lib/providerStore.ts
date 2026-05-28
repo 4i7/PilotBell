@@ -2,6 +2,7 @@ import {
   DEFAULT_PROVIDER_KIND,
   type LegacyProviderConfig,
   type ProviderConfig,
+  isProviderKind,
 } from "../domain/provider";
 
 const STORAGE_KEY = "pilotbell.providers";
@@ -29,7 +30,7 @@ function normalizeProviderMetadata(value: unknown): ProviderConfig | null {
 
   return {
     id: item.id,
-    kind: item.kind === DEFAULT_PROVIDER_KIND ? DEFAULT_PROVIDER_KIND : DEFAULT_PROVIDER_KIND,
+    kind: isProviderKind(item.kind) ? item.kind : DEFAULT_PROVIDER_KIND,
     name: item.name,
     endpoint: item.endpoint,
     model: item.model,
@@ -55,7 +56,7 @@ function normalizeLegacyProvider(value: unknown): LegacyProviderConfig | null {
 
   return {
     id: item.id,
-    kind: item.kind === DEFAULT_PROVIDER_KIND ? DEFAULT_PROVIDER_KIND : DEFAULT_PROVIDER_KIND,
+    kind: isProviderKind(item.kind) ? item.kind : DEFAULT_PROVIDER_KIND,
     name: item.name,
     endpoint: item.endpoint,
     apiKey: item.apiKey,

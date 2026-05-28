@@ -11,6 +11,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const PROVIDER_SECRET_SERVICE: &str = "io.github.fouri7.pilotbell.provider";
 const OPENAI_RESPONSES_KIND: &str = "openai-responses";
+const OLLAMA_KIND: &str = "ollama";
 const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
 const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
 const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
@@ -43,7 +44,6 @@ struct ProviderSecretInput {
 #[derive(Deserialize)]
 struct ResponseEnvelope {
     output: Option<Vec<ResponseItem>>,
-    error: Option<ResponseError>,
 }
 
 #[derive(Deserialize)]
@@ -60,22 +60,19 @@ struct ResponseContent {
     text: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ResponseError {
-    message: Option<String>,
-}
-
 #[derive(Clone, Copy)]
 enum ProviderKind {
     OpenAiResponses,
+    Ollama,
 }
 
 #[derive(Debug)]
 struct ProviderAdapter {
     healthcheck_prompt: &'static str,
+    requires_secret: bool,
     validate: fn(&ProviderConfig) -> Result<(), ProviderCommandError>,
     build_payload: fn(&ProviderConfig, &str) -> Value,
-    parse_response: fn(&str, ResponseEnvelope) -> Result<String, ProviderCommandError>,
+    parse_response: fn(&str, Value) -> Result<String, ProviderCommandError>,
 }
 
 #[derive(Default)]
@@ -163,6 +160,7 @@ impl ProviderCommandError {
 fn parse_provider_kind(kind: &str) -> Result<ProviderKind, ProviderCommandError> {
     match kind.trim() {
         OPENAI_RESPONSES_KIND => Ok(ProviderKind::OpenAiResponses),
+        OLLAMA_KIND => Ok(ProviderKind::Ollama),
         "" => Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
             "Provider type is missing.",
@@ -180,9 +178,17 @@ fn provider_adapter(kind: ProviderKind) -> ProviderAdapter {
     match kind {
         ProviderKind::OpenAiResponses => ProviderAdapter {
             healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
+            requires_secret: true,
             validate: validate_openai_responses_provider,
             build_payload: build_openai_responses_payload,
             parse_response: parse_openai_responses_output,
+        },
+        ProviderKind::Ollama => ProviderAdapter {
+            healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
+            requires_secret: false,
+            validate: validate_ollama_provider,
+            build_payload: build_ollama_generate_payload,
+            parse_response: parse_ollama_generate_output,
         },
     }
 }
@@ -207,7 +213,9 @@ fn validate_provider(provider: &ProviderConfig) -> Result<ProviderAdapter, Provi
         ));
     }
 
-    if !provider.has_secret {
+    let adapter = provider_adapter(parse_provider_kind(&provider.kind)?);
+
+    if adapter.requires_secret && !provider.has_secret {
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
             "Provider secret is missing. Re-enter the API key and save the provider again.",
@@ -215,7 +223,6 @@ fn validate_provider(provider: &ProviderConfig) -> Result<ProviderAdapter, Provi
         ));
     }
 
-    let adapter = provider_adapter(parse_provider_kind(&provider.kind)?);
     (adapter.validate)(provider)?;
     Ok(adapter)
 }
@@ -227,6 +234,18 @@ fn validate_openai_responses_provider(
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
             "Provider endpoint must start with https://",
+            false,
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_ollama_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
+    if !(provider.endpoint.starts_with("http://") || provider.endpoint.starts_with("https://")) {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Ollama endpoint must start with http:// or https://",
             false,
         ));
     }
@@ -306,6 +325,14 @@ fn build_openai_responses_payload(provider: &ProviderConfig, prompt: &str) -> Va
     })
 }
 
+fn build_ollama_generate_payload(provider: &ProviderConfig, prompt: &str) -> Value {
+    json!({
+        "model": provider.model,
+        "prompt": prompt,
+        "stream": false,
+    })
+}
+
 fn extract_openai_output_text(parsed: &ResponseEnvelope) -> Option<String> {
     let mut text_chunks = Vec::new();
 
@@ -333,10 +360,19 @@ fn extract_openai_output_text(parsed: &ResponseEnvelope) -> Option<String> {
     }
 }
 
-fn parse_openai_responses_output(
-    raw: &str,
-    parsed: ResponseEnvelope,
-) -> Result<String, ProviderCommandError> {
+fn parse_openai_responses_output(raw: &str, parsed: Value) -> Result<String, ProviderCommandError> {
+    let parsed = serde_json::from_value::<ResponseEnvelope>(parsed).map_err(|_| {
+        let details = preview_text(raw)
+            .map(Cow::Owned)
+            .unwrap_or_else(|| Cow::Borrowed("Response body could not be parsed as JSON."));
+        ProviderCommandError::new(
+            ProviderErrorKind::ResponseFormat,
+            "Unexpected OpenAI Responses API response format.",
+            false,
+        )
+        .with_details(details)
+    })?;
+
     extract_openai_output_text(&parsed).ok_or_else(|| {
         let details = preview_text(raw)
             .map(Cow::Owned)
@@ -348,6 +384,51 @@ fn parse_openai_responses_output(
         )
         .with_details(details)
     })
+}
+
+fn parse_ollama_generate_output(raw: &str, parsed: Value) -> Result<String, ProviderCommandError> {
+    if let Some(message) = parsed.get("error").and_then(Value::as_str) {
+        if !message.trim().is_empty() {
+            return Err(ProviderCommandError::new(
+                ProviderErrorKind::Provider,
+                format!("Ollama error: {}", message.trim()),
+                false,
+            ));
+        }
+    }
+
+    parsed
+        .get("response")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            let details = preview_text(raw)
+                .map(Cow::Owned)
+                .unwrap_or_else(|| Cow::Borrowed("Response contained no generated text."));
+            ProviderCommandError::new(
+                ProviderErrorKind::ResponseFormat,
+                "No generated text was found in the Ollama response.",
+                false,
+            )
+            .with_details(details)
+        })
+}
+
+fn provider_error_message(parsed: &Value) -> Option<String> {
+    if let Some(message) = parsed
+        .get("error")
+        .and_then(|error| error.get("message").or(Some(error)))
+        .and_then(Value::as_str)
+    {
+        let trimmed = message.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
 }
 
 async fn call_provider(
@@ -365,9 +446,13 @@ async fn call_provider(
     }
 
     let payload = (adapter.build_payload)(&provider, prompt);
-    let api_key = read_provider_secret(&provider.id)?;
+    let api_key = if adapter.requires_secret {
+        Some(read_provider_secret(&provider.id)?)
+    } else {
+        None
+    };
 
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| {
@@ -376,28 +461,32 @@ async fn call_provider(
                 format!("Failed to create HTTP client: {error}"),
                 false,
             )
-        })?
+        })?;
+
+    let mut request = client
         .post(&provider.endpoint)
         .header(CONTENT_TYPE, "application/json")
-        .header(AUTHORIZATION, format!("Bearer {api_key}"))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                ProviderCommandError::new(
-                    ProviderErrorKind::Timeout,
-                    "The provider request timed out after 90 seconds.",
-                    true,
-                )
-            } else {
-                ProviderCommandError::new(
-                    ProviderErrorKind::Network,
-                    format!("Network error: {error}"),
-                    true,
-                )
-            }
-        })?;
+        .json(&payload);
+
+    if let Some(api_key) = api_key {
+        request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
+    }
+
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            ProviderCommandError::new(
+                ProviderErrorKind::Timeout,
+                "The provider request timed out after 90 seconds.",
+                true,
+            )
+        } else {
+            ProviderCommandError::new(
+                ProviderErrorKind::Network,
+                format!("Network error: {error}"),
+                true,
+            )
+        }
+    })?;
 
     let status = response.status();
     let raw = response.text().await.map_err(|error| {
@@ -408,15 +497,15 @@ async fn call_provider(
         )
     })?;
 
-    let parsed = serde_json::from_str::<ResponseEnvelope>(&raw);
+    let parsed = serde_json::from_str::<Value>(&raw);
 
     if !status.is_success() {
         let retryable =
             status.is_server_error() || status.as_u16() == 408 || status.as_u16() == 429;
         let details = preview_text(&raw);
 
-        if let Ok(parsed) = parsed {
-            if let Some(message) = parsed.error.and_then(|error| error.message) {
+        if let Ok(parsed) = parsed.as_ref() {
+            if let Some(message) = provider_error_message(parsed) {
                 let mut error = ProviderCommandError::new(
                     ProviderErrorKind::Provider,
                     format!("Provider error ({status}): {message}"),
@@ -715,6 +804,17 @@ mod tests {
         }
     }
 
+    fn sample_ollama_provider() -> ProviderConfig {
+        ProviderConfig {
+            id: "provider-local".into(),
+            kind: OLLAMA_KIND.into(),
+            name: "Ollama".into(),
+            endpoint: "http://127.0.0.1:11434/api/generate".into(),
+            model: "llama3.2".into(),
+            has_secret: false,
+        }
+    }
+
     #[test]
     fn validate_provider_accepts_openai_responses_shape() {
         assert!(validate_provider(&sample_provider()).is_ok());
@@ -741,6 +841,21 @@ mod tests {
     }
 
     #[test]
+    fn validate_provider_accepts_ollama_without_secret() {
+        assert!(validate_provider(&sample_ollama_provider()).is_ok());
+    }
+
+    #[test]
+    fn build_ollama_payload_disables_streaming() {
+        let provider = sample_ollama_provider();
+        let payload = build_ollama_generate_payload(&provider, "hello");
+
+        assert_eq!(payload["model"], "llama3.2");
+        assert_eq!(payload["prompt"], "hello");
+        assert_eq!(payload["stream"], false);
+    }
+
+    #[test]
     fn build_openai_payload_uses_model_and_input() {
         let provider = sample_provider();
         let payload = build_openai_responses_payload(&provider, "hello");
@@ -763,7 +878,7 @@ mod tests {
             ]
         }"#;
 
-        let parsed: ResponseEnvelope = serde_json::from_str(raw).expect("response should parse");
+        let parsed: Value = serde_json::from_str(raw).expect("response should parse");
         let text =
             parse_openai_responses_output(raw, parsed).expect("output text should be extracted");
 
@@ -783,12 +898,22 @@ mod tests {
             ]
         }"#;
 
-        let parsed: ResponseEnvelope = serde_json::from_str(raw).expect("response should parse");
+        let parsed: Value = serde_json::from_str(raw).expect("response should parse");
         let error = parse_openai_responses_output(raw, parsed)
             .expect_err("missing output_text should return a structured error");
 
         assert!(matches!(error.kind, ProviderErrorKind::ResponseFormat));
         assert!(error.message.contains("No output text"));
         assert!(error.details.is_some());
+    }
+
+    #[test]
+    fn parse_ollama_response_extracts_generated_text() {
+        let raw = r#"{ "model": "llama3.2", "response": "local answer", "done": true }"#;
+        let parsed: Value = serde_json::from_str(raw).expect("response should parse");
+        let text =
+            parse_ollama_generate_output(raw, parsed).expect("generated text should be extracted");
+
+        assert_eq!(text, "local answer");
     }
 }
