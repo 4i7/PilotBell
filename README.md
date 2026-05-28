@@ -17,13 +17,15 @@ The current milestone includes an open provider registration UI where anyone usi
 - Provider capability badges for adapter-specific behavior
 - Local provider metadata saved in browser storage
 - Local source registration for upcoming knowledge folders and files
+- Local source index snapshots saved in browser storage after build
 - Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
 - Provider adapter foundation for request validation, health checks, payload building, and response parsing
 - OpenAI Responses and Anthropic Messages adapters for hosted HTTPS providers with OS-stored API keys
 - Ollama and llama.cpp adapters for local HTTP providers without API-key storage
+- Prompt-time local context injection from indexed source chunks
 
-Planned next steps focus on optional local knowledge-base integrations.
+The current roadmap slice is complete through Phase 4 local knowledge.
 
 ## Setup
 
@@ -103,10 +105,11 @@ cargo check
 - `src/domain/source.ts` - local source registration types and normalization
 - `src/lib/providerStore.ts` - browser storage persistence helpers
 - `src/lib/sourceStore.ts` - local source registration persistence helpers
+- `src/lib/sourceIndexStore.ts` - local source index persistence helpers
 - `src-tauri/src/lib.rs` - Tauri command handler and provider bridge
 - `src-tauri/tauri.conf.json` - Tauri app configuration
 
-## Next Phase Hooks
+## Next Exploration Hooks
 
-- Phase 4: add indexing and retrieval storage for registered local sources.
-- Phase 4: inject retrieved context into the provider request pipeline.
+- Expand file-type coverage and indexing heuristics for larger local knowledge sets.
+- Move retrieval ranking beyond simple term overlap when a stronger local search path is needed.
