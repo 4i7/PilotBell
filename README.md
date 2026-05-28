@@ -19,8 +19,9 @@ The project is currently in an early MVP stage. The current milestone includes a
 - Provider API keys saved in the OS credential store through Rust/Tauri
 - Rust backend commands that forward prompts to registered provider APIs and test provider connectivity
 - Provider adapter foundation for request validation, health checks, payload building, and response parsing
+- Ollama adapter for local `/api/generate` providers without API-key storage
 
-Planned next steps include additional provider adapters for remote and local models and optional local knowledge-base integrations.
+Planned next steps include Anthropic and llama.cpp-compatible adapters plus optional local knowledge-base integrations.
 
 ## Setup
 
