@@ -21,6 +21,7 @@ export type ProviderConfig = {
   endpoint: string;
   model: string;
   hasSecret: boolean;
+  advancedEndpoint: boolean;
 };
 
 export type ProviderDraft = {
@@ -29,6 +30,7 @@ export type ProviderDraft = {
   endpoint: string;
   apiKey: string;
   model: string;
+  advancedEndpoint: boolean;
 };
 
 export type LegacyProviderConfig = {
@@ -39,6 +41,13 @@ export type LegacyProviderConfig = {
   apiKey: string;
   model: string;
   hasSecret?: boolean;
+  advancedEndpoint?: boolean;
+};
+
+export type ProviderEndpointRisk = {
+  isAdvanced: boolean;
+  tone: "neutral" | "warning";
+  message: string;
 };
 
 export function isProviderKind(value: unknown): value is ProviderKind {
@@ -65,6 +74,7 @@ export function normalizeProviderDraft(draft: ProviderDraft): ProviderDraft {
     endpoint: draft.endpoint.trim(),
     apiKey: draft.apiKey.trim(),
     model: draft.model.trim(),
+    advancedEndpoint: draft.advancedEndpoint,
   };
 }
 
@@ -80,13 +90,75 @@ export function isProviderDraftValid(
   );
 }
 
+export function providerIsCloud(kind: ProviderKind) {
+  return kind === DEFAULT_PROVIDER_KIND || kind === ANTHROPIC_PROVIDER_KIND;
+}
+
+export function officialEndpointForProvider(kind: ProviderKind) {
+  switch (kind) {
+    case DEFAULT_PROVIDER_KIND:
+      return "https://api.openai.com/v1/responses";
+    case ANTHROPIC_PROVIDER_KIND:
+      return "https://api.anthropic.com/v1/messages";
+    case OLLAMA_PROVIDER_KIND:
+      return "http://127.0.0.1:11434/api/generate";
+    case LLAMA_CPP_PROVIDER_KIND:
+      return "http://127.0.0.1:8080/v1/chat/completions";
+  }
+}
+
+export function isLoopbackEndpoint(endpoint: string) {
+  try {
+    const url = new URL(endpoint);
+    const host = url.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+export function classifyProviderEndpoint(kind: ProviderKind, endpoint: string): ProviderEndpointRisk {
+  const normalizedEndpoint = endpoint.trim().replace(/\/+$/, "").toLowerCase();
+  const official = officialEndpointForProvider(kind).replace(/\/+$/, "").toLowerCase();
+
+  if (providerIsCloud(kind)) {
+    if (normalizedEndpoint === official) {
+      return {
+        isAdvanced: false,
+        tone: "neutral",
+        message: "Official HTTPS endpoint.",
+      };
+    }
+    return {
+      isAdvanced: true,
+      tone: "warning",
+      message:
+        "Custom hosted endpoints are advanced. Cloud API keys may be sent to a non-standard URL.",
+    };
+  }
+
+  if (isLoopbackEndpoint(endpoint)) {
+    return {
+      isAdvanced: false,
+      tone: "neutral",
+      message: "Local loopback endpoint.",
+    };
+  }
+
+  return {
+    isAdvanced: true,
+    tone: "warning",
+    message: "LAN or external local-provider endpoints are advanced and should be trusted explicitly.",
+  };
+}
+
 export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[] {
   switch (kind) {
     case DEFAULT_PROVIDER_KIND:
       return [
         {
           label: "Hosted",
-          detail: "Calls a remote HTTPS endpoint from the Tauri backend.",
+          detail: "Uses the official hosted HTTPS endpoint unless advanced endpoint mode is enabled.",
         },
         {
           label: "Secure key",
@@ -101,7 +173,7 @@ export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[
       return [
         {
           label: "Hosted",
-          detail: "Calls Anthropic's hosted Messages API over HTTPS from the Tauri backend.",
+          detail: "Uses Anthropic's official hosted Messages endpoint unless advanced endpoint mode is enabled.",
         },
         {
           label: "Secure key",
@@ -116,7 +188,7 @@ export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[
       return [
         {
           label: "Local",
-          detail: "Calls a local Ollama server from the Tauri backend.",
+          detail: "Calls a loopback Ollama server by default; LAN/external endpoints require advanced mode.",
         },
         {
           label: "No API key",
@@ -131,7 +203,7 @@ export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[
       return [
         {
           label: "Local",
-          detail: "Calls a local llama.cpp server from the Tauri backend.",
+          detail: "Calls a loopback llama.cpp server by default; LAN/external endpoints require advanced mode.",
         },
         {
           label: "No API key",

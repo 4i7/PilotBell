@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PilotBell",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "io.github.fouri7.pilotbell",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,10 +14,11 @@
       {
         "title": "PilotBell",
         "center": true,
-        "width": 680,
-        "height": 460,
-        "minWidth": 520,
-        "minHeight": 420
+        "width": 980,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 560,
+        "decorations": false
       }
     ],
     "security": {
@@ -31,8 +32,8 @@
     "homepage": "https://github.com/4i7/PilotBell",
     "copyright": "Copyright (c) 2026 4i7",
     "category": "Productivity",
-    "shortDescription": "A lightweight desktop AI command palette.",
-    "longDescription": "PilotBell is a lightweight desktop AI command palette built with Tauri, Rust, React, and TypeScript. This installer is intended for general Windows users and sets up the desktop app with standard shortcuts.",
+    "shortDescription": "A Rust-native document processing desktop tool.",
+    "longDescription": "PilotBell is a Rust-native desktop tool for fast local PDF and Excel analysis, reviewable Markdown and SVG output, and DOCX report generation with optional LLM assistance.",
     "license": "MIT",
     "licenseFile": "../LICENSE",
     "icon": [
