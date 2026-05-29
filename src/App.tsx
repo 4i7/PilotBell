@@ -39,10 +39,18 @@ import {
   normalizeLocalSourceDraft,
 } from "./domain/source";
 import type { AttachedPromptFile } from "./domain/prompt";
+import type { PromptInputPreferences, SubmitShortcutMode } from "./domain/inputPreferences";
+import { DEFAULT_PROMPT_INPUT_PREFERENCES } from "./domain/inputPreferences";
+import { AppChrome } from "./components/AppChrome";
 import { DocumentWorkflowPanel } from "./components/DocumentWorkflowPanel";
 import { PromptComposer } from "./components/PromptComposer";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { SessionHistory } from "./components/SessionHistory";
 import { useDocumentJobs } from "./hooks/useDocumentJobs";
+import {
+  loadPromptInputPreferences,
+  savePromptInputPreferences,
+} from "./lib/inputPreferenceStore";
 import { loadProviderState, saveProviders } from "./lib/providerStore";
 import {
   type PromptSessionEntry,
@@ -118,6 +126,7 @@ type StatusTone = "neutral" | "success" | "warning" | "error";
 type InlineStatus = {
   tone: StatusTone;
   message: string;
+  dismissKey?: "global-shortcut";
 };
 
 type AppShellState = {
@@ -144,6 +153,17 @@ const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: ANTHROPIC_PROVIDER_KIND, label: "Anthropic Messages" },
   { value: OLLAMA_PROVIDER_KIND, label: "Ollama" },
   { value: LLAMA_CPP_PROVIDER_KIND, label: "llama.cpp" },
+];
+
+const SUBMIT_SHORTCUT_OPTIONS: Array<{
+  value: SubmitShortcutMode;
+  label: string;
+}> = [
+  { value: "mod-enter", label: "Ctrl/Cmd+Enter" },
+  { value: "enter", label: "Enter" },
+  { value: "shift-enter", label: "Shift+Enter" },
+  { value: "ctrl-enter", label: "Ctrl+Enter" },
+  { value: "disabled", label: "Disabled" },
 ];
 
 const SOURCE_KIND_OPTIONS: Array<{ value: LocalSourceKind; label: string }> = [
@@ -195,6 +215,8 @@ const DEFAULT_LOCAL_SOURCE_DRAFT: LocalSourceDraft = {
 };
 
 const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
+const SETTINGS_SECTION_EVENT = "pilotbell://settings-section";
+const GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY = "pilotbell.hideGlobalShortcutNotice";
 const BROWSER_PREVIEW_MESSAGE =
   "Browser preview mode detected. PilotBell desktop features require `npm run tauri dev` or a packaged Tauri build.";
 const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
@@ -423,8 +445,8 @@ function IconBase(props: SVGProps<SVGSVGElement>) {
 function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>
-      <path d="M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7Z" />
-      <path d="m19.4 15l1.1 1.9l-1.7 2.9l-2.2-.3a7.9 7.9 0 0 1-1.6.9L14.2 22h-4.4l-.8-1.6a7.9 7.9 0 0 1-1.6-.9l-2.2.3l-1.7-2.9L4.6 15a8.4 8.4 0 0 1 0-2l-1.1-1.9l1.7-2.9l2.2.3a7.9 7.9 0 0 1 1.6-.9L9.8 2h4.4l.8 1.6c.6.2 1.1.5 1.6.9l2.2-.3l1.7 2.9L19.4 9c.1.7.1 1.3 0 2Z" />
+      <path d="M9.7 3.4h4.6l.5 2.1c.5.2 1 .5 1.4.8l2-.7l2.3 4l-1.6 1.4v2l1.6 1.4l-2.3 4l-2-.7c-.4.3-.9.6-1.4.8l-.5 2.1H9.7l-.5-2.1c-.5-.2-1-.5-1.4-.8l-2 .7l-2.3-4L5.1 13v-2L3.5 9.6l2.3-4l2 .7c.4-.3.9-.6 1.4-.8l.5-2.1Z" />
+      <circle cx="12" cy="12" r="3.2" />
     </IconBase>
   );
 }
@@ -505,6 +527,40 @@ function SquareIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function isSettingsSection(value: unknown): value is SettingsSection {
+  return value === "providers" || value === "documents" || value === "sources";
+}
+
+function getInitialSettingsSection(): SettingsSection {
+  if (typeof window === "undefined") {
+    return "providers";
+  }
+
+  const section = new URLSearchParams(window.location.search).get("section");
+  return isSettingsSection(section) ? section : "providers";
+}
+
+function isSettingsWindowView() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return new URLSearchParams(window.location.search).get("view") === "settings";
+}
+
+function loadGlobalShortcutNoticeHidden() {
+  return localStorage.getItem(GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY) === "true";
+}
+
+function RestoreIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M9 6.5h8.5V15" />
+      <path d="M15 9h-8.5v8.5H15" />
+    </IconBase>
+  );
+}
+
 function CloseIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>
@@ -525,7 +581,7 @@ function App() {
   const [providerHealthRecords, setProviderHealthRecords] = useState<
     Record<string, ProviderHealthRecord>
   >(() => loadProviderHealthRecords());
-  const [isSending, setIsSending] = useState(false);
+  const [pendingSendCount, setPendingSendCount] = useState(0);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
   const [isSavingProvider, setIsSavingProvider] = useState(false);
   const [isMigratingProviders, setIsMigratingProviders] = useState(
@@ -538,9 +594,17 @@ function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
     loadThemePreference(),
   );
+  const [inputPreferences, setInputPreferences] = useState<PromptInputPreferences>(() =>
+    loadPromptInputPreferences(),
+  );
+  const [isGlobalShortcutNoticeHidden, setIsGlobalShortcutNoticeHidden] = useState(() =>
+    loadGlobalShortcutNoticeHidden(),
+  );
   const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => detectSystemTheme());
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("providers");
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>(getInitialSettingsSection);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedPromptFile[]>([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -577,8 +641,10 @@ function App() {
     : [];
   const providerDraftRequiresApiKey = providerRequiresApiKey(providerDraft.kind);
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
+  const isSettingsWindow = useMemo(() => isSettingsWindowView(), []);
   const documentJobs = useDocumentJobs(isTauriRuntime);
   const resolvedTheme = resolveThemePreference(themePreference, systemTheme);
+  const isSending = pendingSendCount > 0;
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -594,7 +660,7 @@ function App() {
     [sessionEntries],
   );
   const shouldPromptInitialSetup = !hasReadyProvider && !hasSuccessfulSession;
-  const shouldShowSettings = settingsOpen || shouldPromptInitialSetup;
+  const shouldShowSettings = settingsOpen;
   const isProviderActionsDisabled =
     isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
   const isSourceActionsDisabled = removingSourceId.length > 0;
@@ -618,6 +684,18 @@ function App() {
   function persistThemePreference(next: ThemePreference) {
     setThemePreference(next);
     saveThemePreference(next);
+  }
+
+  function persistInputPreferences(next: PromptInputPreferences) {
+    setInputPreferences(next);
+    savePromptInputPreferences(next);
+  }
+
+  function updateInputPreferences(
+    updater: (current: PromptInputPreferences) => PromptInputPreferences,
+  ) {
+    const next = updater(inputPreferences);
+    persistInputPreferences(next);
   }
 
   function addSessionEntry(entry: PromptSessionEntry) {
@@ -650,8 +728,20 @@ function App() {
 
   function openSettings(section: SettingsSection = "providers") {
     setSettingsSection(section);
-    setSettingsOpen(true);
     setProviderMenuOpen(false);
+
+    if (isTauriRuntime && !isSettingsWindow) {
+      void invoke("open_settings_window", { section }).catch((err) => {
+        setSettingsOpen(true);
+        setChatStatus({
+          tone: "warning",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+      return;
+    }
+
+    setSettingsOpen(true);
   }
 
   function closeSettings() {
@@ -681,6 +771,34 @@ function App() {
 
   async function hidePaletteWindow() {
     return invoke("hide_palette_window");
+  }
+
+  function dismissGlobalShortcutNotice() {
+    localStorage.setItem(GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY, "true");
+    setIsGlobalShortcutNoticeHidden(true);
+    setChatStatus((current) => (current?.dismissKey === "global-shortcut" ? null : current));
+  }
+
+  async function startWindowDrag() {
+    if (!isTauriRuntime || isSettingsWindow) {
+      return;
+    }
+
+    await getCurrentWindow().startDragging();
+  }
+
+  async function minimizeWindow() {
+    await getCurrentWindow().minimize();
+  }
+
+  async function toggleMaximizeWindow() {
+    const currentWindow = getCurrentWindow();
+    await currentWindow.toggleMaximize();
+    setIsWindowMaximized(await currentWindow.isMaximized());
+  }
+
+  async function closeWindow() {
+    await getCurrentWindow().close();
   }
 
   useEffect(() => {
@@ -728,6 +846,55 @@ function App() {
   }, [resolvedTheme, themePreference]);
 
   useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
+    const currentWindow = getCurrentWindow();
+    let unlistenResize: (() => void) | undefined;
+    let cancelled = false;
+
+    async function syncWindowState() {
+      const maximized = await currentWindow.isMaximized();
+      if (!cancelled) {
+        setIsWindowMaximized(maximized);
+      }
+    }
+
+    void syncWindowState();
+    void currentWindow.onResized(async () => {
+      await syncWindowState();
+    }).then((unlisten) => {
+      unlistenResize = unlisten;
+    });
+
+    return () => {
+      cancelled = true;
+      unlistenResize?.();
+    };
+  }, [isTauriRuntime]);
+
+  useEffect(() => {
+    if (!isSettingsWindow || !isTauriRuntime) {
+      return;
+    }
+
+    let unlistenSettingsSection: (() => void) | undefined;
+
+    void listen<string>(SETTINGS_SECTION_EVENT, (event) => {
+      if (isSettingsSection(event.payload)) {
+        setSettingsSection(event.payload);
+      }
+    }).then((unlisten) => {
+      unlistenSettingsSection = unlisten;
+    });
+
+    return () => {
+      unlistenSettingsSection?.();
+    };
+  }, [isSettingsWindow, isTauriRuntime]);
+
+  useEffect(() => {
     if (!providerMenuOpen) {
       return;
     }
@@ -743,7 +910,7 @@ function App() {
   }, [providerMenuOpen]);
 
   useEffect(() => {
-    if (!shouldShowSettings || shouldPromptInitialSetup) {
+    if (!shouldShowSettings) {
       return;
     }
 
@@ -755,9 +922,13 @@ function App() {
 
     window.addEventListener("mousedown", onPointerDown);
     return () => window.removeEventListener("mousedown", onPointerDown);
-  }, [shouldPromptInitialSetup, shouldShowSettings]);
+  }, [shouldShowSettings]);
 
   useEffect(() => {
+    if (isSettingsWindow) {
+      return;
+    }
+
     if (!isTauriRuntime) {
       setProviderStatus({
         tone: "warning",
@@ -785,7 +956,7 @@ function App() {
 
       setShellState(nextShellState);
 
-      if (nextShellState.message) {
+      if (nextShellState.message && !isGlobalShortcutNoticeHidden) {
         setChatStatus({
           tone:
             nextShellState.globalShortcutRegistered && !nextShellState.usedFallbackShortcut
@@ -794,11 +965,13 @@ function App() {
                 ? "warning"
                 : "error",
           message: nextShellState.message,
+          dismissKey: "global-shortcut",
         });
       }
 
       const currentWindow = getCurrentWindow();
-      await currentWindow.setSkipTaskbar(nextShellState.globalShortcutRegistered);
+      // Keep the window reachable after a normal minimize action.
+      await currentWindow.setSkipTaskbar(false);
       await currentWindow.setAlwaysOnTop(nextShellState.globalShortcutRegistered);
       if (nextShellState.globalShortcutRegistered) {
         await currentWindow.setFocus();
@@ -811,10 +984,10 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [isTauriRuntime]);
+  }, [isGlobalShortcutNoticeHidden, isSettingsWindow, isTauriRuntime]);
 
   useEffect(() => {
-    if (!isTauriRuntime) {
+    if (!isTauriRuntime || isSettingsWindow) {
       return;
     }
 
@@ -840,7 +1013,7 @@ function App() {
           return;
         }
 
-        if (settingsOpen && !shouldPromptInitialSetup) {
+        if (settingsOpen) {
           keyboardEvent.preventDefault();
           closeSettings();
           return;
@@ -860,7 +1033,7 @@ function App() {
       unlistenWindowFocus?.();
       removeEscapeListener?.();
     };
-  }, [isTauriRuntime, providerMenuOpen, settingsOpen, shellState, shouldPromptInitialSetup]);
+  }, [isSettingsWindow, isTauriRuntime, providerMenuOpen, settingsOpen, shellState]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -1477,10 +1650,6 @@ function App() {
           tone: "success",
           message: `${result.data.message} (${latencyMs} ms)`,
         });
-        setChatStatus({
-          tone: "success",
-          message: `${selectedProvider.name} is ready.`,
-        });
       } else {
         updateProviderHealthRecord({
           providerId: selectedProvider.id,
@@ -1544,15 +1713,34 @@ function App() {
 
     setSelectedProviderId(provider.id);
     setPrompt(entry.prompt);
-    void sendPrompt(entry.prompt, provider);
+    void sendPrompt(entry.prompt, provider, {
+      ...DEFAULT_PROMPT_INPUT_PREFERENCES,
+      clearOnSubmit: false,
+      focusAfterSubmit: false,
+      allowSubmitWhileSending: false,
+    });
   }
 
-  async function sendPrompt(promptOverride?: string, providerOverride?: ProviderConfig) {
+  async function sendPrompt(
+    promptOverride?: string,
+    providerOverride?: ProviderConfig,
+    options: PromptInputPreferences = DEFAULT_PROMPT_INPUT_PREFERENCES,
+  ) {
     if (!isTauriRuntime) {
       setReplyError(localValidationError(BROWSER_PREVIEW_MESSAGE));
       setChatStatus({
         tone: "warning",
         message: BROWSER_PREVIEW_MESSAGE,
+      });
+      return;
+    }
+
+    if (isSending && !options.allowSubmitWhileSending) {
+      const error = localValidationError("Wait for the current response before sending again.");
+      setReplyError(error);
+      setChatStatus({
+        tone: "warning",
+        message: error.message,
       });
       return;
     }
@@ -1591,7 +1779,7 @@ function App() {
       return;
     }
 
-    setIsSending(true);
+    setPendingSendCount((current) => current + 1);
     setReplyError(null);
 
     try {
@@ -1610,7 +1798,9 @@ function App() {
           model: result.data.model,
           response: result.data.content,
         });
-        setPrompt("");
+        if (promptOverride === undefined && options.clearOnSubmit) {
+          setPrompt("");
+        }
         setAttachedFiles([]);
         setCloudContextReviewAccepted(false);
         setChatStatus({
@@ -1646,11 +1836,18 @@ function App() {
         message: error.message,
       });
     } finally {
-      setIsSending(false);
+      setPendingSendCount((current) => Math.max(0, current - 1));
+      if (options.focusAfterSubmit) {
+        promptRef.current?.focus();
+      }
       if (attachedFiles.length === 0) {
         setCloudContextReviewAccepted(false);
       }
     }
+  }
+
+  function requestPromptSubmit() {
+    void sendPrompt(undefined, undefined, inputPreferences);
   }
 
   async function handleAttachFiles(fileList: FileList | File[]) {
@@ -1709,88 +1906,28 @@ function App() {
 
   return (
     <>
+      {!isSettingsWindow ? (
       <main className="shell">
         <div className="window-shell">
-          <header className="window-header" data-tauri-drag-region>
-            <div className="window-title" data-tauri-drag-region>
-              <div className="window-title-copy">
-                <span className="window-badge">PilotBell</span>
-                <div>
-                  <h1>Ask once, act fast.</h1>
-                  <p>
-                    {shellState?.activeShortcut
-                      ? `Shortcut: ${shellState.activeShortcut}${shellState.usedFallbackShortcut ? " (fallback)" : ""}`
-                      : "Rust-native document workflow"}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="window-actions">
-              <div className="theme-switcher" role="group" aria-label="Theme">
-                {THEME_OPTIONS.map((option, index) => {
-                  const Icon = option.icon;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={
-                        option.value === themePreference ? "theme-option active" : "theme-option"
-                      }
-                      style={{ ["--theme-index" as string]: String(index) }}
-                      onClick={() => persistThemePreference(option.value)}
-                      aria-pressed={option.value === themePreference}
-                      title={
-                        option.value === "system"
-                          ? `Follow system theme. Current: ${resolvedTheme}.`
-                          : `${option.label} theme`
-                      }
-                    >
-                      <Icon />
-                    </button>
-                  );
-                })}
-              </div>
-
-              <button
-                type="button"
-                className="window-icon-button"
-                onClick={() => openSettings("providers")}
-                aria-label="Open settings"
-              >
-                <SettingsIcon />
-              </button>
-              <button
-                type="button"
-                className="window-icon-button"
-                onClick={() => void getCurrentWindow().minimize()}
-                aria-label="Minimize window"
-              >
-                <MinusIcon />
-              </button>
-              <button
-                type="button"
-                className="window-icon-button"
-                onClick={() => void getCurrentWindow().toggleMaximize()}
-                aria-label="Toggle maximize"
-              >
-                <SquareIcon />
-              </button>
-              <button
-                type="button"
-                className="window-icon-button danger"
-                onClick={() => void getCurrentWindow().close()}
-                aria-label="Close window"
-              >
-                <CloseIcon />
-              </button>
-            </div>
-          </header>
+          <AppChrome
+            title="PilotBell"
+            isMaximized={isWindowMaximized}
+            onOpenSettings={() => openSettings("providers")}
+            onStartDrag={() => void startWindowDrag()}
+            onMinimize={() => void minimizeWindow()}
+            onToggleMaximize={() => void toggleMaximizeWindow()}
+            onClose={() => void closeWindow()}
+            SettingsIcon={SettingsIcon}
+            MinusIcon={MinusIcon}
+            MaximizeIcon={SquareIcon}
+            RestoreIcon={RestoreIcon}
+            CloseIcon={CloseIcon}
+          />
 
           <section className="workspace">
-            <div className="chat-surface">
+            <div className={chatEntries.length === 0 ? "chat-surface empty-session" : "chat-surface"}>
               <SessionHistory
                 entries={chatEntries}
-                shouldPromptInitialSetup={shouldPromptInitialSetup}
                 isSending={isSending}
                 isTauriRuntime={isTauriRuntime}
                 formatSessionTime={formatSessionTime}
@@ -1820,6 +1957,7 @@ function App() {
                 fileInputRef={fileInputRef}
                 promptRef={promptRef}
                 providerMenuRef={providerMenuRef}
+                inputPreferences={inputPreferences}
                 icons={{
                   Attach: AttachIcon,
                   ArrowUp: ArrowUpIcon,
@@ -1830,7 +1968,7 @@ function App() {
                 readinessLabel={readinessLabel}
                 setProviderMenuOpen={setProviderMenuOpen}
                 setSelectedProviderId={setSelectedProviderId}
-                onSubmitPrompt={() => void sendPrompt()}
+                onSubmitPrompt={requestPromptSubmit}
                 onFileInputChange={(event) => void onFileInputChange(event)}
                 onDragOver={onComposerDragOver}
                 onDragLeave={onComposerDragLeave}
@@ -1842,64 +1980,48 @@ function App() {
               />
 
               {chatStatus ? (
-                <div className={`notice notice-${chatStatus.tone}`}>{chatStatus.message}</div>
+                <div className={`notice notice-${chatStatus.tone}`}>
+                  <span>{chatStatus.message}</span>
+                  {chatStatus.dismissKey === "global-shortcut" ? (
+                    <button
+                      type="button"
+                      className="notice-dismiss"
+                      onClick={dismissGlobalShortcutNotice}
+                    >
+                      Hide next time
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
               {replyError?.details ? <pre className="detail">{replyError.details}</pre> : null}
             </div>
           </section>
         </div>
       </main>
+      ) : null}
 
-      {shouldShowSettings ? (
-        <div className="settings-overlay">
-          <div className="settings-panel" ref={settingsPanelRef}>
-            <div className="settings-header">
-              <div>
-                <p className="eyebrow">Settings</p>
-                <h2>{shouldPromptInitialSetup ? "First run setup" : "PilotBell settings"}</h2>
-                <p className="helper">
-                  {shouldPromptInitialSetup
-                    ? "PilotBell detected no proven-ready provider yet. Save and test one provider to move into the compact prompt-only surface."
-                    : "Provider and document workflow controls stay here so the main surface can remain focused."}
-                </p>
-              </div>
-              {!shouldPromptInitialSetup ? (
-                <button
-                  type="button"
-                  className="window-icon-button"
-                  onClick={closeSettings}
-                  aria-label="Close settings"
-                >
-                  <CloseIcon />
-                </button>
-              ) : null}
-            </div>
-
-            <div className="settings-tabs">
-              <button
-                type="button"
-                className={settingsSection === "providers" ? "settings-tab active" : "settings-tab"}
-                onClick={() => setSettingsSection("providers")}
-              >
-                Providers
-              </button>
-              <button
-                type="button"
-                className={settingsSection === "documents" ? "settings-tab active" : "settings-tab"}
-                onClick={() => setSettingsSection("documents")}
-              >
-                Documents
-              </button>
-              <button
-                type="button"
-                className={settingsSection === "sources" ? "settings-tab active" : "settings-tab"}
-                onClick={() => setSettingsSection("sources")}
-              >
-                Sources
-              </button>
-            </div>
-
-            {settingsSection === "providers" ? (
+      <SettingsPanel
+        isOpen={isSettingsWindow || shouldShowSettings}
+        mode={isSettingsWindow ? "window" : "overlay"}
+        shouldPromptInitialSetup={shouldPromptInitialSetup}
+        activeSection={settingsSection}
+        onSectionChange={setSettingsSection}
+        onClose={isSettingsWindow ? () => void closeWindow() : closeSettings}
+        onStartDrag={() => void startWindowDrag()}
+        onMinimize={() => void minimizeWindow()}
+        onToggleMaximize={() => void toggleMaximizeWindow()}
+        panelRef={settingsPanelRef}
+        isMaximized={isWindowMaximized}
+        themePreference={themePreference}
+        resolvedTheme={resolvedTheme}
+        themeOptions={THEME_OPTIONS}
+        onThemeChange={persistThemePreference}
+        MinusIcon={MinusIcon}
+        MaximizeIcon={SquareIcon}
+        RestoreIcon={RestoreIcon}
+        CloseIcon={CloseIcon}
+      >
+        {settingsSection === "providers" ? (
               <div className="settings-section">
                 <div className="settings-summary-card">
                   <div>
@@ -1914,6 +2036,90 @@ function App() {
                         {capability.label}
                       </span>
                     ))}
+                  </div>
+                </div>
+
+                <div className="settings-summary-card">
+                  <div className="section-heading">
+                    <div>
+                      <h3>Prompt input</h3>
+                      <p>
+                        Composer behavior stays here so the main surface remains focused on the next prompt.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="settings-grid settings-grid-single">
+                    <select
+                      value={inputPreferences.submitShortcut}
+                      onChange={(event) =>
+                        updateInputPreferences((current) => ({
+                          ...current,
+                          submitShortcut: event.currentTarget.value as SubmitShortcutMode,
+                        }))
+                      }
+                    >
+                      {SUBMIT_SHORTCUT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="settings-checkbox-list">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={inputPreferences.clearOnSubmit}
+                        onChange={(event) =>
+                          updateInputPreferences((current) => ({
+                            ...current,
+                            clearOnSubmit: event.currentTarget.checked,
+                          }))
+                        }
+                      />
+                      Clear prompt after a successful send
+                    </label>
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={inputPreferences.focusAfterSubmit}
+                        onChange={(event) =>
+                          updateInputPreferences((current) => ({
+                            ...current,
+                            focusAfterSubmit: event.currentTarget.checked,
+                          }))
+                        }
+                      />
+                      Return focus to the prompt after submit
+                    </label>
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={inputPreferences.allowSubmitWhileSending}
+                        onChange={(event) =>
+                          updateInputPreferences((current) => ({
+                            ...current,
+                            allowSubmitWhileSending: event.currentTarget.checked,
+                          }))
+                        }
+                      />
+                      Allow a new send while a response is still running
+                    </label>
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={inputPreferences.autoResize}
+                        onChange={(event) =>
+                          updateInputPreferences((current) => ({
+                            ...current,
+                            autoResize: event.currentTarget.checked,
+                          }))
+                        }
+                      />
+                      Auto-resize the prompt field
+                    </label>
                   </div>
                 </div>
 
@@ -2357,9 +2563,7 @@ function App() {
                 )}
               </div>
             )}
-          </div>
-        </div>
-      ) : null}
+      </SettingsPanel>
     </>
   );
 }

@@ -1,16 +1,20 @@
 import {
   type ChangeEvent,
   type ComponentType,
-  type Dispatch,
   type DragEvent,
   type FormEvent,
   type RefObject,
-  type SetStateAction,
   type SVGProps,
+  useCallback,
 } from "react";
 import type { ProviderConfig } from "../domain/provider";
 import type { AttachedPromptFile } from "../domain/prompt";
+import type { PromptInputPreferences } from "../domain/inputPreferences";
+import { useAutoResizeTextarea } from "../hooks/useAutoResizeTextarea";
+import { usePromptSubmitHotkey } from "../hooks/usePromptSubmitHotkey";
 import type { ProviderHealthRecord, ProviderReadiness } from "../lib/providerHealthStore";
+import { ProviderSelector } from "./ProviderSelector";
+import { StatusLine } from "./StatusLine";
 
 type PromptComposerIcons = {
   Attach: ComponentType<SVGProps<SVGSVGElement>>;
@@ -41,10 +45,11 @@ type PromptComposerProps = {
   fileInputRef: RefObject<HTMLInputElement | null>;
   promptRef: RefObject<HTMLTextAreaElement | null>;
   providerMenuRef: RefObject<HTMLDivElement | null>;
+  inputPreferences: PromptInputPreferences;
   icons: PromptComposerIcons;
   formatBytes: (size: number) => string;
   readinessLabel: (readiness: ProviderReadiness) => string;
-  setProviderMenuOpen: Dispatch<SetStateAction<boolean>>;
+  setProviderMenuOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   setSelectedProviderId: (providerId: string) => void;
   onSubmitPrompt: () => void;
   onFileInputChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -79,6 +84,7 @@ export function PromptComposer({
   fileInputRef,
   promptRef,
   providerMenuRef,
+  inputPreferences,
   icons,
   formatBytes,
   readinessLabel,
@@ -98,20 +104,63 @@ export function PromptComposer({
   const ArrowUpIcon = icons.ArrowUp;
   const ChevronDownIcon = icons.ChevronDown;
   const CloseIcon = icons.Close;
+  const isEmptySession = sessionEntryCount === 0;
+
+  const canSubmit =
+    Boolean(prompt.trim()) &&
+    Boolean(selectedProvider) &&
+    isTauriRuntime &&
+    !isMigratingProviders &&
+    (!isSending || inputPreferences.allowSubmitWhileSending);
+
+  const requestSubmit = useCallback(() => {
+    if (!canSubmit) {
+      return;
+    }
+
+    onSubmitPrompt();
+  }, [canSubmit, onSubmitPrompt]);
+
+  useAutoResizeTextarea({
+    enabled: inputPreferences.autoResize,
+    value: prompt,
+    textareaRef: promptRef,
+    minRows: isEmptySession ? 10 : 2,
+    maxRows: isEmptySession ? 18 : 8,
+    maxHeightVh: isEmptySession ? 70 : 35,
+  });
+
+  usePromptSubmitHotkey({
+    mode: inputPreferences.submitShortcut,
+    textareaRef: promptRef,
+    onSubmit: requestSubmit,
+  });
 
   function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    onSubmitPrompt();
+    requestSubmit();
   }
 
   return (
     <form
-      className={isDraggingFiles ? "composer-dock dragging" : "composer-dock"}
+      className={[
+        "composer-dock",
+        isEmptySession ? "empty-composer" : "",
+        isDraggingFiles ? "dragging" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onSubmit={submitPrompt}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
+      {shouldPromptInitialSetup ? (
+        <p className="composer-setup-note">
+          No provider configured. Add OpenAI, Anthropic, Ollama, or llama.cpp to start.
+        </p>
+      ) : null}
+
       {attachedFiles.length > 0 ? (
         <div className="attachment-strip">
           {attachedFiles.map((file) => (
@@ -136,150 +185,78 @@ export function PromptComposer({
         </div>
       ) : null}
 
-      <div className="composer-row">
-        <button
-          type="button"
-          className="attach-button"
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Add attachment"
-        >
-          <AttachIcon />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden-input"
-          multiple
-          onChange={onFileInputChange}
-        />
-
-        <label className="composer-input" htmlFor="prompt">
-          <textarea
-            id="prompt"
-            ref={promptRef}
-            value={prompt}
-            onChange={(event) => setPrompt(event.currentTarget.value)}
-            placeholder={
-              shouldPromptInitialSetup
-                ? "Set up a provider, or ask anyway after saving one..."
-                : "Ask PilotBell..."
-            }
-            rows={1}
-          />
-        </label>
-
-        <div className="composer-controls">
-          <div className="provider-switcher" ref={providerMenuRef}>
+      <div className="composer-layout">
+        <div className="composer-main">
+          <div className="composer-row">
             <button
               type="button"
-              className="provider-switcher-button"
-              onClick={() => setProviderMenuOpen((current) => !current)}
+              className="attach-button"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Add attachment"
             >
-              <span>{selectedProviderLabel}</span>
-              <ChevronDownIcon />
+              <AttachIcon />
             </button>
-            {providerMenuOpen ? (
-              <div className="provider-menu">
-                {providers.length > 0 ? (
-                  providers.map((provider) => {
-                    const readiness = providerHealthRecords[provider.id]?.readiness ?? "unknown";
-                    return (
-                      <button
-                        key={provider.id}
-                        type="button"
-                        className={
-                          provider.id === selectedProviderId
-                            ? "provider-menu-item active"
-                            : "provider-menu-item"
-                        }
-                        onClick={() => {
-                          setSelectedProviderId(provider.id);
-                          setProviderMenuOpen(false);
-                        }}
-                      >
-                        <div>
-                          <strong>{provider.model || "model not set"}</strong>
-                          <span>{provider.name}</span>
-                        </div>
-                        <span className={`readiness readiness-${readiness}`}>
-                          {readinessLabel(readiness)}
-                        </span>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="provider-menu-empty">No providers saved yet.</div>
-                )}
-                <div className="provider-menu-divider" />
-                <button
-                  type="button"
-                  className="provider-menu-item settings-item"
-                  onClick={openProviderSettings}
-                >
-                  Settings...
-                </button>
-              </div>
-            ) : null}
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden-input"
+              multiple
+              onChange={onFileInputChange}
+            />
+
+            <label className="composer-input" htmlFor="prompt">
+              <textarea
+                id="prompt"
+                ref={promptRef}
+                value={prompt}
+                onChange={(event) => setPrompt(event.currentTarget.value)}
+                placeholder={shouldPromptInitialSetup ? "Add a provider in settings..." : "Ask PilotBell..."}
+                rows={2}
+              />
+            </label>
           </div>
+        </div>
+
+        <div className="composer-side">
+          <ProviderSelector
+            selectedProvider={selectedProvider}
+            selectedProviderId={selectedProviderId}
+            providers={providers}
+            providerHealthRecords={providerHealthRecords}
+            providerMenuOpen={providerMenuOpen}
+            providerMenuRef={providerMenuRef}
+            isDisabled={isProviderActionsDisabled}
+            selectedProviderLabel={selectedProviderLabel}
+            readinessLabel={readinessLabel}
+            setProviderMenuOpen={setProviderMenuOpen}
+            setSelectedProviderId={setSelectedProviderId}
+            openProviderSettings={openProviderSettings}
+            ChevronDownIcon={ChevronDownIcon}
+          />
 
           <button
             type="submit"
             className="send-button"
-            disabled={
-              isSending ||
-              !isTauriRuntime ||
-              isMigratingProviders ||
-              !selectedProvider ||
-              !prompt.trim()
-            }
+            disabled={!canSubmit}
             aria-label="Send prompt"
           >
             <ArrowUpIcon />
+            <span>Send</span>
           </button>
         </div>
       </div>
 
-      <div className="composer-footer">
-        <div className="composer-status-line">
-          {selectedProvider ? (
-            <>
-              <span className="status-pill">
-                {selectedProvider.name} / {selectedProvider.model || "model not set"}
-              </span>
-              <span
-                className={`readiness readiness-${selectedProviderHealth?.readiness ?? "unknown"}`}
-              >
-                {readinessLabel(selectedProviderHealth?.readiness ?? "unknown")}
-              </span>
-            </>
-          ) : (
-            <span className="status-pill">No provider selected</span>
-          )}
-        </div>
-        <div className="composer-actions">
-          <button
-            type="button"
-            className="ghost-action"
-            onClick={testProvider}
-            disabled={
-              !isTauriRuntime ||
-              isProviderActionsDisabled ||
-              isTestingProvider ||
-              !selectedProvider
-            }
-          >
-            {isTestingProvider ? "Testing..." : "Test API"}
-          </button>
-          <button
-            type="button"
-            className="ghost-action"
-            onClick={clearSession}
-            disabled={sessionEntryCount === 0}
-          >
-            Clear chat
-          </button>
-        </div>
-      </div>
+      <StatusLine
+        selectedProvider={selectedProvider}
+        selectedProviderHealth={selectedProviderHealth}
+        readinessLabel={readinessLabel}
+        isTestingProvider={isTestingProvider}
+        isProviderActionsDisabled={isProviderActionsDisabled}
+        isTauriRuntime={isTauriRuntime}
+        sessionEntryCount={sessionEntryCount}
+        testProvider={testProvider}
+        clearSession={clearSession}
+      />
     </form>
   );
 }

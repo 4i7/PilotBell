@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -28,6 +28,7 @@ const ANTHROPIC_VERSION_HEADER: &str = "2023-06-01";
 const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
 const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
 const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
+const SETTINGS_SECTION_EVENT: &str = "pilotbell://settings-section";
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -886,6 +887,43 @@ fn hide_palette_window(app: AppHandle) -> Result<(), String> {
     hide_main_window_impl(&app, &window)
 }
 
+fn normalize_settings_section(section: Option<String>) -> String {
+    match section.as_deref() {
+        Some("documents") => "documents".into(),
+        Some("sources") => "sources".into(),
+        _ => "providers".into(),
+    }
+}
+
+#[tauri::command]
+fn open_settings_window(app: AppHandle, section: Option<String>) -> Result<(), String> {
+    let section = normalize_settings_section(section);
+
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        app.emit_to("settings", SETTINGS_SECTION_EVENT, &section)
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        WebviewUrl::App(format!("index.html?view=settings&section={section}").into()),
+    )
+    .title("PilotBell Settings")
+    .inner_size(760.0, 820.0)
+    .min_inner_size(420.0, 520.0)
+    .center()
+    .decorations(false)
+    .resizable(true)
+    .focused(true)
+    .build()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 async fn store_provider_secret(
     input: ProviderSecretInput,
@@ -1112,6 +1150,7 @@ pub fn run() {
             get_app_shell_state,
             handle_prompt,
             hide_palette_window,
+            open_settings_window,
             start_document_workflow,
             store_provider_secret,
             test_provider
