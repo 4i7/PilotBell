@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type DragEvent,
+  type ReactElement,
+  type SVGProps,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -10,24 +19,30 @@ import {
   type ProviderConfig,
   type ProviderDraft,
   type ProviderKind,
+  classifyProviderEndpoint,
   getProviderCapabilities,
   isProviderDraftValid,
   makeProviderId,
   normalizeProviderDraft,
+  officialEndpointForProvider,
+  providerIsCloud,
   providerRequiresApiKey,
 } from "./domain/provider";
 import {
   DIRECTORY_SOURCE_KIND,
   FILE_SOURCE_KIND,
-  type IndexedSourceChunk,
   type LocalSource,
   type LocalSourceDraft,
-  type LocalSourceIndexSnapshot,
   type LocalSourceKind,
   isLocalSourceDraftValid,
   makeLocalSourceId,
   normalizeLocalSourceDraft,
 } from "./domain/source";
+import type { AttachedPromptFile } from "./domain/prompt";
+import { DocumentWorkflowPanel } from "./components/DocumentWorkflowPanel";
+import { PromptComposer } from "./components/PromptComposer";
+import { SessionHistory } from "./components/SessionHistory";
+import { useDocumentJobs } from "./hooks/useDocumentJobs";
 import { loadProviderState, saveProviders } from "./lib/providerStore";
 import {
   type PromptSessionEntry,
@@ -36,16 +51,18 @@ import {
 } from "./lib/sessionStore";
 import { loadLocalSources, saveLocalSources } from "./lib/sourceStore";
 import {
-  clearLocalSourceIndex,
-  loadLocalSourceIndex,
-  saveLocalSourceIndex,
-} from "./lib/sourceIndexStore";
-import {
   type ProviderHealthRecord,
   type ProviderReadiness,
   loadProviderHealthRecords,
   saveProviderHealthRecords,
 } from "./lib/providerHealthStore";
+import {
+  type ResolvedTheme,
+  type ThemePreference,
+  loadThemePreference,
+  resolveThemePreference,
+  saveThemePreference,
+} from "./lib/themeStore";
 import "./App.css";
 
 type AssistantReply = {
@@ -80,11 +97,9 @@ type ProviderSecretStatus = {
   message: string;
 };
 
-type SourceIndexBuildResult = {
-  sourceCount: number;
-  documentCount: number;
-  chunkCount: number;
-  chunks: IndexedSourceChunk[];
+type ProviderSecretDiagnosis = {
+  providerId: string;
+  hasSecret: boolean;
   message: string;
 };
 
@@ -112,20 +127,17 @@ type AppShellState = {
   message?: string | null;
 };
 
-const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
-const BROWSER_PREVIEW_MESSAGE =
-  "Browser preview mode detected. PilotBell desktop features require `npm run tauri dev` or a packaged Tauri build.";
+type SettingsSection = "providers" | "documents" | "sources";
 
-function hasTauriRuntime() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return (
-    typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-    "undefined"
-  );
-}
+const THEME_OPTIONS: Array<{
+  value: ThemePreference;
+  label: string;
+  icon: (props: SVGProps<SVGSVGElement>) => ReactElement;
+}> = [
+  { value: "light", label: "Light", icon: SunIcon },
+  { value: "dark", label: "Dark", icon: MoonIcon },
+  { value: "system", label: "System", icon: MonitorIcon },
+];
 
 const PROVIDER_KIND_OPTIONS: Array<{ value: ProviderKind; label: string }> = [
   { value: DEFAULT_PROVIDER_KIND, label: "OpenAI Responses" },
@@ -144,7 +156,8 @@ const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
   name: "OpenAI",
   endpoint: "https://api.openai.com/v1/responses",
   apiKey: "",
-  model: "gpt-5.4-mini",
+  model: "",
+  advancedEndpoint: false,
 };
 
 const OLLAMA_PROVIDER_DRAFT: ProviderDraft = {
@@ -153,6 +166,7 @@ const OLLAMA_PROVIDER_DRAFT: ProviderDraft = {
   endpoint: "http://127.0.0.1:11434/api/generate",
   apiKey: "",
   model: "llama3.2",
+  advancedEndpoint: false,
 };
 
 const ANTHROPIC_PROVIDER_DRAFT: ProviderDraft = {
@@ -161,6 +175,7 @@ const ANTHROPIC_PROVIDER_DRAFT: ProviderDraft = {
   endpoint: "https://api.anthropic.com/v1/messages",
   apiKey: "",
   model: "claude-sonnet-4-20250514",
+  advancedEndpoint: false,
 };
 
 const LLAMA_CPP_PROVIDER_DRAFT: ProviderDraft = {
@@ -169,6 +184,7 @@ const LLAMA_CPP_PROVIDER_DRAFT: ProviderDraft = {
   endpoint: "http://127.0.0.1:8080/v1/chat/completions",
   apiKey: "",
   model: "local-llama",
+  advancedEndpoint: false,
 };
 
 const DEFAULT_LOCAL_SOURCE_DRAFT: LocalSourceDraft = {
@@ -177,6 +193,35 @@ const DEFAULT_LOCAL_SOURCE_DRAFT: LocalSourceDraft = {
   path: "",
   notes: "",
 };
+
+const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
+const BROWSER_PREVIEW_MESSAGE =
+  "Browser preview mode detected. PilotBell desktop features require `npm run tauri dev` or a packaged Tauri build.";
+const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
+const MAX_ATTACHMENT_TEXT_CHARS = 8_000;
+
+function hasTauriRuntime() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return (
+    typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
+    "undefined"
+  );
+}
+
+function detectSystemTheme(): ResolvedTheme {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  ) {
+    return "dark";
+  }
+
+  return "light";
+}
 
 function providerKindLabel(kind: ProviderKind) {
   return PROVIDER_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
@@ -204,6 +249,10 @@ function localValidationError(message: string): ProviderCommandError {
 
 function makeSessionEntryId() {
   return `session-${crypto.randomUUID()}`;
+}
+
+function makeAttachmentId() {
+  return `attachment-${crypto.randomUUID()}`;
 }
 
 function formatSessionTime(value: string) {
@@ -239,6 +288,16 @@ function formatRelativeTime(value: string) {
   return `${elapsedHours}h ago`;
 }
 
+function formatBytes(size: number) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function readinessLabel(readiness: ProviderReadiness) {
   switch (readiness) {
     case "ready":
@@ -252,72 +311,212 @@ function readinessLabel(readiness: ProviderReadiness) {
   }
 }
 
-function tokenizeForRetrieval(text: string) {
-  return Array.from(
-    new Set(text.toLowerCase().match(/[a-z0-9_./:\\-]{3,}/g) ?? []),
-  );
-}
-
-function selectRelevantChunks(
-  prompt: string,
-  snapshot: LocalSourceIndexSnapshot | null,
-  limit = 3,
-) {
-  if (!snapshot || snapshot.chunks.length === 0) {
-    return [];
-  }
-
-  const promptTerms = new Set(tokenizeForRetrieval(prompt));
-  if (promptTerms.size === 0) {
-    return [];
-  }
-
-  return snapshot.chunks
-    .map((chunk) => {
-      const haystackTerms = tokenizeForRetrieval(
-        `${chunk.sourceName} ${chunk.path} ${chunk.snippet} ${chunk.text}`,
-      );
-      const score = haystackTerms.reduce(
-        (total, term) => total + (promptTerms.has(term) ? 1 : 0),
-        0,
-      );
-      return { chunk, score };
-    })
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit)
-    .map((item) => item.chunk);
-}
-
-function buildPromptWithLocalContext(
-  prompt: string,
-  snapshot: LocalSourceIndexSnapshot | null,
-) {
-  const chunks = selectRelevantChunks(prompt, snapshot);
-  if (chunks.length === 0) {
+function buildPromptWithAttachments(prompt: string, files: AttachedPromptFile[]) {
+  if (files.length === 0) {
     return {
       preparedPrompt: prompt,
-      contextCount: 0,
+      attachmentCount: 0,
     };
   }
 
-  const contextBlock = chunks
-    .map(
-      (chunk, index) =>
-        `[${index + 1}] ${chunk.sourceName}\nPath: ${chunk.path}\n${chunk.text}`,
-    )
+  const attachmentBlock = files
+    .map((file, index) => {
+      const metadata = `${file.name} (${formatBytes(file.size)}${file.type ? `, ${file.type}` : ""})`;
+      if (file.textContent) {
+        return `[${index + 1}] ${metadata}\n${file.textContent}`;
+      }
+
+      return `[${index + 1}] ${metadata}\n${file.note ?? "Attachment added without extracted text content."}`;
+    })
     .join("\n\n");
 
   return {
-    preparedPrompt: `Use the following local context when it is relevant to the user's request.\n\n${contextBlock}\n\nUser prompt:\n${prompt}`,
-    contextCount: chunks.length,
+    preparedPrompt: `Use the following attached file context when it is relevant.\n\n${attachmentBlock}\n\nUser prompt:\n${prompt}`,
+    attachmentCount: files.length,
   };
+}
+
+function extensionForFileName(name: string) {
+  const parts = name.toLowerCase().split(".");
+  return parts.length > 1 ? parts[parts.length - 1] ?? "" : "";
+}
+
+function isTextAttachment(file: File) {
+  const extension = extensionForFileName(file.name);
+  return (
+    file.type.startsWith("text/") ||
+    [
+      "md",
+      "txt",
+      "json",
+      "csv",
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "py",
+      "rs",
+      "html",
+      "css",
+      "toml",
+      "yaml",
+      "yml",
+      "xml",
+    ].includes(extension)
+  );
+}
+
+async function readAttachedPromptFile(file: File): Promise<AttachedPromptFile> {
+  const attachment: AttachedPromptFile = {
+    id: makeAttachmentId(),
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  };
+
+  const extension = extensionForFileName(file.name);
+  if (extension === "pdf") {
+    attachment.note =
+      "PDF attached. Binary intake is wired, but PDF text extraction is not connected to the prompt pipeline yet.";
+    return attachment;
+  }
+
+  if (!isTextAttachment(file)) {
+    attachment.note = "Binary attachment added. Metadata is available, but text extraction is not active for this file type yet.";
+    return attachment;
+  }
+
+  if (file.size > MAX_ATTACHMENT_TEXT_BYTES) {
+    attachment.note =
+      "Text attachment added, but it is too large for inline prompt injection. Only metadata was attached.";
+    return attachment;
+  }
+
+  const rawText = (await file.text()).replace(/\r\n/g, "\n").trim();
+  if (!rawText) {
+    attachment.note = "Attachment was empty after text extraction.";
+    return attachment;
+  }
+
+  attachment.textContent = rawText.slice(0, MAX_ATTACHMENT_TEXT_CHARS);
+  if (rawText.length > MAX_ATTACHMENT_TEXT_CHARS) {
+    attachment.note = "Attachment text was truncated before prompt injection.";
+  }
+  return attachment;
+}
+
+function IconBase(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    />
+  );
+}
+
+function SettingsIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7Z" />
+      <path d="m19.4 15l1.1 1.9l-1.7 2.9l-2.2-.3a7.9 7.9 0 0 1-1.6.9L14.2 22h-4.4l-.8-1.6a7.9 7.9 0 0 1-1.6-.9l-2.2.3l-1.7-2.9L4.6 15a8.4 8.4 0 0 1 0-2l-1.1-1.9l1.7-2.9l2.2.3a7.9 7.9 0 0 1 1.6-.9L9.8 2h4.4l.8 1.6c.6.2 1.1.5 1.6.9l2.2-.3l1.7 2.9L19.4 9c.1.7.1 1.3 0 2Z" />
+    </IconBase>
+  );
+}
+
+function AttachIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </IconBase>
+  );
+}
+
+function ArrowUpIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m12 18V6" />
+      <path d="m7 11l5-5l5 5" />
+    </IconBase>
+  );
+}
+
+function ChevronDownIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 9l6 6l6-6" />
+    </IconBase>
+  );
+}
+
+function SunIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2.4" />
+      <path d="M12 19.6V22" />
+      <path d="m4.9 4.9l1.7 1.7" />
+      <path d="m17.4 17.4l1.7 1.7" />
+      <path d="M2 12h2.4" />
+      <path d="M19.6 12H22" />
+      <path d="m4.9 19.1l1.7-1.7" />
+      <path d="m17.4 6.6l1.7-1.7" />
+    </IconBase>
+  );
+}
+
+function MoonIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M14.5 3.8a7.5 7.5 0 1 0 5.7 10.8a8.8 8.8 0 1 1-5.7-10.8Z" />
+    </IconBase>
+  );
+}
+
+function MonitorIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <rect x="3.5" y="5" width="17" height="11.5" rx="2.4" />
+      <path d="M9 19h6" />
+      <path d="M12 16.5V19" />
+    </IconBase>
+  );
+}
+
+function MinusIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M6 12h12" />
+    </IconBase>
+  );
+}
+
+function SquareIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </IconBase>
+  );
+}
+
+function CloseIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 6l12 12" />
+      <path d="m18 6l-12 12" />
+    </IconBase>
+  );
 }
 
 function App() {
   const [initialProviderState] = useState(() => loadProviderState());
   const [prompt, setPrompt] = useState("");
-  const [reply, setReply] = useState<AssistantReply | null>(null);
   const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
   const [shellState, setShellState] = useState<AppShellState | null>(null);
   const [sessionEntries, setSessionEntries] = useState<PromptSessionEntry[]>(() =>
@@ -335,16 +534,23 @@ function App() {
   const [removingProviderId, setRemovingProviderId] = useState("");
   const [providerStatus, setProviderStatus] = useState<InlineStatus | null>(null);
   const [sourceStatus, setSourceStatus] = useState<InlineStatus | null>(null);
-  const [isBuildingSourceIndex, setIsBuildingSourceIndex] = useState(false);
+  const [chatStatus, setChatStatus] = useState<InlineStatus | null>(null);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
+    loadThemePreference(),
+  );
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => detectSystemTheme());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("providers");
+  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedPromptFile[]>([]);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [cloudContextReviewAccepted, setCloudContextReviewAccepted] = useState(false);
 
   const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({ ...DEFAULT_PROVIDER_DRAFT });
   const [localSources, setLocalSources] = useState<LocalSource[]>(() => loadLocalSources());
-  const [sourceIndexSnapshot, setSourceIndexSnapshot] = useState<LocalSourceIndexSnapshot | null>(
-    () => loadLocalSourceIndex(),
-  );
   const [editingSourceId, setEditingSourceId] = useState("");
   const [removingSourceId, setRemovingSourceId] = useState("");
   const [sourceDraft, setSourceDraft] = useState<LocalSourceDraft>({
@@ -363,7 +569,6 @@ function App() {
     () => localSources.find((source) => source.id === editingSourceId) ?? null,
     [localSources, editingSourceId],
   );
-  const latestSessionEntry = sessionEntries[0] ?? null;
   const selectedProviderHealth = selectedProvider
     ? providerHealthRecords[selectedProvider.id] ?? null
     : null;
@@ -372,7 +577,28 @@ function App() {
     : [];
   const providerDraftRequiresApiKey = providerRequiresApiKey(providerDraft.kind);
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
+  const documentJobs = useDocumentJobs(isTauriRuntime);
+  const resolvedTheme = resolveThemePreference(themePreference, systemTheme);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const providerMenuRef = useRef<HTMLDivElement | null>(null);
+  const settingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const chatEntries = useMemo(() => [...sessionEntries].reverse(), [sessionEntries]);
+  const hasReadyProvider = useMemo(
+    () =>
+      providers.some((provider) => providerHealthRecords[provider.id]?.readiness === "ready"),
+    [providerHealthRecords, providers],
+  );
+  const hasSuccessfulSession = useMemo(
+    () => sessionEntries.some((entry) => Boolean(entry.response)),
+    [sessionEntries],
+  );
+  const shouldPromptInitialSetup = !hasReadyProvider && !hasSuccessfulSession;
+  const shouldShowSettings = settingsOpen || shouldPromptInitialSetup;
+  const isProviderActionsDisabled =
+    isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
+  const isSourceActionsDisabled = removingSourceId.length > 0;
+  const providerEndpointRisk = classifyProviderEndpoint(providerDraft.kind, providerDraft.endpoint);
 
   function persistProviders(next: ProviderConfig[]) {
     setProviders(next);
@@ -384,19 +610,14 @@ function App() {
     saveLocalSources(next);
   }
 
-  function persistLocalSourceIndex(next: LocalSourceIndexSnapshot) {
-    setSourceIndexSnapshot(next);
-    saveLocalSourceIndex(next);
-  }
-
-  function resetLocalSourceIndex() {
-    setSourceIndexSnapshot(null);
-    clearLocalSourceIndex();
-  }
-
   function persistSessionEntries(next: PromptSessionEntry[]) {
     setSessionEntries(next);
     savePromptSession(next);
+  }
+
+  function persistThemePreference(next: ThemePreference) {
+    setThemePreference(next);
+    saveThemePreference(next);
   }
 
   function addSessionEntry(entry: PromptSessionEntry) {
@@ -427,6 +648,16 @@ function App() {
     });
   }
 
+  function openSettings(section: SettingsSection = "providers") {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+    setProviderMenuOpen(false);
+  }
+
+  function closeSettings() {
+    setSettingsOpen(false);
+  }
+
   async function storeProviderSecret(providerId: string, apiKey: string) {
     return invoke<CommandResult<ProviderSecretStatus>>("store_provider_secret", {
       input: {
@@ -442,9 +673,89 @@ function App() {
     });
   }
 
+  async function diagnoseProviderSecret(providerId: string) {
+    return invoke<CommandResult<ProviderSecretDiagnosis>>("diagnose_provider_secret", {
+      providerId,
+    });
+  }
+
   async function hidePaletteWindow() {
     return invoke("hide_palette_window");
   }
+
+  useEffect(() => {
+    if (!selectedProviderId && providers.length > 0) {
+      setSelectedProviderId(providers[0].id);
+      return;
+    }
+
+    if (
+      selectedProviderId &&
+      providers.length > 0 &&
+      !providers.some((provider) => provider.id === selectedProviderId)
+    ) {
+      setSelectedProviderId(providers[0].id);
+    }
+  }, [providers, selectedProviderId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateTheme = () => {
+      setSystemTheme(mediaQuery.matches ? "dark" : "light");
+    };
+
+    updateTheme();
+    mediaQuery.addEventListener("change", updateTheme);
+
+    return () => {
+      mediaQuery.removeEventListener("change", updateTheme);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const root = document.documentElement;
+    root.dataset.theme = resolvedTheme;
+    root.dataset.themePreference = themePreference;
+    root.style.colorScheme = resolvedTheme;
+  }, [resolvedTheme, themePreference]);
+
+  useEffect(() => {
+    if (!providerMenuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!providerMenuRef.current?.contains(event.target as Node)) {
+        setProviderMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [providerMenuOpen]);
+
+  useEffect(() => {
+    if (!shouldShowSettings || shouldPromptInitialSetup) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!settingsPanelRef.current?.contains(event.target as Node)) {
+        closeSettings();
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [shouldPromptInitialSetup, shouldShowSettings]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -453,6 +764,10 @@ function App() {
         message: BROWSER_PREVIEW_MESSAGE,
       });
       setSourceStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
+      setChatStatus({
         tone: "warning",
         message: BROWSER_PREVIEW_MESSAGE,
       });
@@ -471,7 +786,7 @@ function App() {
       setShellState(nextShellState);
 
       if (nextShellState.message) {
-        setProviderStatus({
+        setChatStatus({
           tone:
             nextShellState.globalShortcutRegistered && !nextShellState.usedFallbackShortcut
               ? "success"
@@ -519,6 +834,18 @@ function App() {
           return;
         }
 
+        if (providerMenuOpen) {
+          keyboardEvent.preventDefault();
+          setProviderMenuOpen(false);
+          return;
+        }
+
+        if (settingsOpen && !shouldPromptInitialSetup) {
+          keyboardEvent.preventDefault();
+          closeSettings();
+          return;
+        }
+
         keyboardEvent.preventDefault();
         await hidePaletteWindow();
       };
@@ -533,7 +860,7 @@ function App() {
       unlistenWindowFocus?.();
       removeEscapeListener?.();
     };
-  }, [isTauriRuntime, shellState]);
+  }, [isTauriRuntime, providerMenuOpen, settingsOpen, shellState, shouldPromptInitialSetup]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -582,6 +909,7 @@ function App() {
           endpoint: provider.endpoint,
           model: provider.model,
           hasSecret: true,
+          advancedEndpoint: provider.advancedEndpoint ?? false,
         });
       }
 
@@ -612,10 +940,15 @@ function App() {
   function applyOpenAIPreset() {
     setProviderDraft((current) => ({
       ...current,
-      kind: DEFAULT_PROVIDER_KIND,
-      name: current.name.trim() || "OpenAI",
-      endpoint: "https://api.openai.com/v1/responses",
-      model: current.model.trim() || "gpt-5.4-mini",
+      ...DEFAULT_PROVIDER_DRAFT,
+      name:
+        current.name.trim() && current.kind === DEFAULT_PROVIDER_KIND
+          ? current.name
+          : DEFAULT_PROVIDER_DRAFT.name,
+      model:
+        current.model.trim() && current.kind === DEFAULT_PROVIDER_KIND
+          ? current.model
+          : DEFAULT_PROVIDER_DRAFT.model,
     }));
   }
 
@@ -675,6 +1008,7 @@ function App() {
       endpoint: provider.endpoint,
       apiKey: "",
       model: provider.model,
+      advancedEndpoint: provider.advancedEndpoint,
     });
     setProviderStatus({
       tone: "neutral",
@@ -682,6 +1016,7 @@ function App() {
         ? `Editing ${provider.name}. Leave API key blank to keep the stored secret when the provider type stays the same.`
         : `Editing ${provider.name}. This provider does not use an API key.`,
     });
+    openSettings("providers");
   }
 
   function cancelProviderEdit() {
@@ -703,12 +1038,21 @@ function App() {
 
     const normalized = normalizeProviderDraft(providerDraft);
     const requiresApiKey = providerRequiresApiKey(normalized.kind);
+    const endpointRisk = classifyProviderEndpoint(normalized.kind, normalized.endpoint);
     if (!isProviderDraftValid(normalized, { requireApiKey: requiresApiKey })) {
       setProviderStatus({
         tone: "warning",
         message: requiresApiKey
           ? "Provider registration failed: all fields are required."
           : "Provider registration failed: type, name, endpoint, and model are required.",
+      });
+      return;
+    }
+
+    if (endpointRisk.isAdvanced && !normalized.advancedEndpoint) {
+      setProviderStatus({
+        tone: "warning",
+        message: `${endpointRisk.message} Enable advanced endpoint mode to save this provider.`,
       });
       return;
     }
@@ -720,6 +1064,7 @@ function App() {
       endpoint: normalized.endpoint,
       model: normalized.model,
       hasSecret: requiresApiKey,
+      advancedEndpoint: normalized.advancedEndpoint,
     };
 
     setIsSavingProvider(true);
@@ -781,6 +1126,7 @@ function App() {
 
     const normalized = normalizeProviderDraft(providerDraft);
     const requiresApiKey = providerRequiresApiKey(normalized.kind);
+    const endpointRisk = classifyProviderEndpoint(normalized.kind, normalized.endpoint);
     const hostedProviderKindChanged =
       editingProvider.kind !== normalized.kind &&
       providerRequiresApiKey(editingProvider.kind) &&
@@ -809,6 +1155,14 @@ function App() {
       return;
     }
 
+    if (endpointRisk.isAdvanced && !normalized.advancedEndpoint) {
+      setProviderStatus({
+        tone: "warning",
+        message: `${endpointRisk.message} Enable advanced endpoint mode before updating this provider.`,
+      });
+      return;
+    }
+
     const nextProvider: ProviderConfig = {
       id: editingProvider.id,
       kind: normalized.kind,
@@ -820,6 +1174,7 @@ function App() {
           ? Boolean(normalized.apiKey)
           : editingProvider.hasSecret || Boolean(normalized.apiKey)
         : false,
+      advancedEndpoint: normalized.advancedEndpoint,
     };
 
     setIsSavingProvider(true);
@@ -858,16 +1213,16 @@ function App() {
       setSelectedProviderId(nextProvider.id);
       removeProviderHealthRecord(nextProvider.id);
       resetProviderDraft();
-        setProviderStatus({
-          tone: "success",
-          message: !requiresApiKey
-            ? `Updated ${nextProvider.name}. No API key is required for this provider. Run Test API to refresh readiness.`
-            : hostedProviderKindChanged
-              ? `Updated ${nextProvider.name} and stored a new API key for the new provider type. Run Test API to refresh readiness.`
-              : normalized.apiKey
+      setProviderStatus({
+        tone: "success",
+        message: !requiresApiKey
+          ? `Updated ${nextProvider.name}. No API key is required for this provider. Run Test API to refresh readiness.`
+          : hostedProviderKindChanged
+            ? `Updated ${nextProvider.name} and stored a new API key for the new provider type. Run Test API to refresh readiness.`
+            : normalized.apiKey
               ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
               : `Updated ${nextProvider.name}. Stored API key was kept. Run Test API to refresh readiness.`,
-        });
+      });
     } catch (err) {
       setProviderStatus({
         tone: "error",
@@ -922,6 +1277,84 @@ function App() {
     }
   }
 
+  async function diagnoseSelectedProviderSecret() {
+    if (!selectedProvider || !providerRequiresApiKey(selectedProvider.kind)) {
+      setProviderStatus({
+        tone: "neutral",
+        message: "Selected provider does not use a stored secret.",
+      });
+      return;
+    }
+
+    const result = await diagnoseProviderSecret(selectedProvider.id);
+    if (result.status === "error") {
+      setProviderStatus({
+        tone: toneForProviderError(result.error),
+        message: result.error.message,
+      });
+      return;
+    }
+
+    setProviderStatus({
+      tone: result.data.hasSecret ? "success" : "warning",
+      message: result.data.message,
+    });
+  }
+
+  async function repairSelectedProviderSecretMetadata() {
+    if (!selectedProvider || !providerRequiresApiKey(selectedProvider.kind)) {
+      return;
+    }
+
+    const result = await diagnoseProviderSecret(selectedProvider.id);
+    if (result.status === "error") {
+      setProviderStatus({
+        tone: toneForProviderError(result.error),
+        message: result.error.message,
+      });
+      return;
+    }
+
+    const next = providers.map((provider) =>
+      provider.id === selectedProvider.id
+        ? { ...provider, hasSecret: result.data.hasSecret }
+        : provider,
+    );
+    persistProviders(next);
+    removeProviderHealthRecord(selectedProvider.id);
+    setProviderStatus({
+      tone: result.data.hasSecret ? "success" : "warning",
+      message: result.data.hasSecret
+        ? "Provider metadata repaired: stored secret is present."
+        : "Provider metadata repaired: stored secret is missing. Re-save the API key.",
+    });
+  }
+
+  async function deleteSelectedProviderSecretOnly() {
+    if (!selectedProvider || !providerRequiresApiKey(selectedProvider.kind)) {
+      return;
+    }
+
+    const result = await deleteProviderSecret(selectedProvider.id);
+    if (result.status === "error") {
+      setProviderStatus({
+        tone: toneForProviderError(result.error),
+        message: result.error.message,
+      });
+      return;
+    }
+
+    const next = providers.map((provider) =>
+      provider.id === selectedProvider.id ? { ...provider, hasSecret: false } : provider,
+    );
+    persistProviders(next);
+    removeProviderHealthRecord(selectedProvider.id);
+    setProviderStatus({
+      tone: "warning",
+      message: "Stored secret deleted. Re-save the API key before testing this provider.",
+    });
+  }
+
   function resetSourceDraft() {
     setEditingSourceId("");
     setSourceDraft({ ...DEFAULT_LOCAL_SOURCE_DRAFT });
@@ -939,6 +1372,7 @@ function App() {
       tone: "neutral",
       message: `Editing ${source.name}. Update the path metadata and save when ready.`,
     });
+    openSettings("sources");
   }
 
   function cancelSourceEdit() {
@@ -971,17 +1405,15 @@ function App() {
       persistLocalSources(
         localSources.map((source) => (source.id === nextSource.id ? nextSource : source)),
       );
-      resetLocalSourceIndex();
       setSourceStatus({
         tone: "success",
-        message: `Updated ${nextSource.name}. Rebuild the local index to refresh retrieval context.`,
+        message: `Updated ${nextSource.name}. Source registration is deprecated for new document workflows.`,
       });
     } else {
       persistLocalSources([nextSource, ...localSources]);
-      resetLocalSourceIndex();
       setSourceStatus({
         tone: "success",
-        message: `Registered ${nextSource.name}. Build the local index to make it retrievable in prompts.`,
+        message: `Registered ${nextSource.name}. New document workflows use selected files instead of a persistent index.`,
       });
     }
 
@@ -992,64 +1424,14 @@ function App() {
     setRemovingSourceId(id);
     const next = localSources.filter((source) => source.id !== id);
     persistLocalSources(next);
-    resetLocalSourceIndex();
     if (editingSourceId === id) {
       resetSourceDraft();
     }
     setSourceStatus({
       tone: "neutral",
-      message: "Local source registration removed. Rebuild the local index if needed.",
+      message: "Local source registration removed.",
     });
     setRemovingSourceId("");
-  }
-
-  async function buildSourceIndex() {
-    if (!isTauriRuntime) {
-      setSourceStatus({
-        tone: "warning",
-        message: BROWSER_PREVIEW_MESSAGE,
-      });
-      return;
-    }
-
-    if (localSources.length === 0) {
-      setSourceStatus({
-        tone: "warning",
-        message: "Register at least one local source before building the index.",
-      });
-      return;
-    }
-
-    setIsBuildingSourceIndex(true);
-    setSourceStatus({
-      tone: "neutral",
-      message: `Indexing ${localSources.length} local source(s)...`,
-    });
-
-    try {
-      const result = await invoke<SourceIndexBuildResult>("build_source_index", {
-        sources: localSources,
-      });
-      const snapshot: LocalSourceIndexSnapshot = {
-        builtAt: new Date().toISOString(),
-        sourceCount: result.sourceCount,
-        documentCount: result.documentCount,
-        chunkCount: result.chunkCount,
-        chunks: result.chunks,
-      };
-      persistLocalSourceIndex(snapshot);
-      setSourceStatus({
-        tone: "success",
-        message: `${result.message} Retrieval context is now active for matching prompts.`,
-      });
-    } catch (err) {
-      setSourceStatus({
-        tone: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setIsBuildingSourceIndex(false);
-    }
   }
 
   async function testProvider() {
@@ -1095,6 +1477,10 @@ function App() {
           tone: "success",
           message: `${result.data.message} (${latencyMs} ms)`,
         });
+        setChatStatus({
+          tone: "success",
+          message: `${selectedProvider.name} is ready.`,
+        });
       } else {
         updateProviderHealthRecord({
           providerId: selectedProvider.id,
@@ -1124,12 +1510,12 @@ function App() {
   async function copyText(text: string, label: string) {
     try {
       await navigator.clipboard.writeText(text);
-      setProviderStatus({
+      setChatStatus({
         tone: "success",
         message: `${label} copied to clipboard.`,
       });
     } catch (err) {
-      setProviderStatus({
+      setChatStatus({
         tone: "error",
         message: err instanceof Error ? err.message : String(err),
       });
@@ -1138,18 +1524,17 @@ function App() {
 
   function clearSession() {
     persistSessionEntries([]);
-    setReply(null);
     setReplyError(null);
-    setProviderStatus({
+    setChatStatus({
       tone: "neutral",
-      message: "Prompt session cleared.",
+      message: "Chat cleared.",
     });
   }
 
   function retrySessionEntry(entry: PromptSessionEntry) {
     const provider = providers.find((candidate) => candidate.id === entry.providerId);
     if (!provider) {
-      setProviderStatus({
+      setChatStatus({
         tone: "warning",
         message: "The provider used for that prompt is no longer available.",
       });
@@ -1158,12 +1543,17 @@ function App() {
     }
 
     setSelectedProviderId(provider.id);
+    setPrompt(entry.prompt);
     void sendPrompt(entry.prompt, provider);
   }
 
   async function sendPrompt(promptOverride?: string, providerOverride?: ProviderConfig) {
     if (!isTauriRuntime) {
       setReplyError(localValidationError(BROWSER_PREVIEW_MESSAGE));
+      setChatStatus({
+        tone: "warning",
+        message: BROWSER_PREVIEW_MESSAGE,
+      });
       return;
     }
 
@@ -1171,30 +1561,46 @@ function App() {
     const targetProvider = providerOverride ?? selectedProvider;
 
     if (!targetProvider) {
-      setReplyError(localValidationError("Select a provider before sending."));
+      const error = localValidationError("Select a provider before sending.");
+      setReplyError(error);
+      setChatStatus({
+        tone: "warning",
+        message: error.message,
+      });
+      openSettings("providers");
       return;
     }
     if (!targetPrompt.trim()) {
-      setReplyError(localValidationError("Prompt is empty."));
+      const error = localValidationError("Prompt is empty.");
+      setReplyError(error);
+      setChatStatus({
+        tone: "warning",
+        message: error.message,
+      });
+      return;
+    }
+
+    const hasLocalExcerpts = attachedFiles.some((file) => Boolean(file.textContent));
+    if (providerIsCloud(targetProvider.kind) && hasLocalExcerpts && !cloudContextReviewAccepted) {
+      setCloudContextReviewAccepted(true);
+      setChatStatus({
+        tone: "warning",
+        message:
+          "Local document excerpts may be included in prompts sent to the selected provider. Review the context before sending sensitive data. Press send again to continue.",
+      });
       return;
     }
 
     setIsSending(true);
     setReplyError(null);
-    setPrompt(targetPrompt);
 
     try {
-      const { preparedPrompt, contextCount } = buildPromptWithLocalContext(
-        targetPrompt,
-        sourceIndexSnapshot,
-      );
+      const withAttachments = buildPromptWithAttachments(targetPrompt, attachedFiles);
       const result = await invoke<CommandResult<AssistantReply>>("handle_prompt", {
-        prompt: preparedPrompt,
+        prompt: withAttachments.preparedPrompt,
         provider: targetProvider,
       });
       if (result.status === "success") {
-        setReply(result.data);
-        setReplyError(null);
         addSessionEntry({
           id: makeSessionEntryId(),
           prompt: targetPrompt,
@@ -1204,15 +1610,17 @@ function App() {
           model: result.data.model,
           response: result.data.content,
         });
-        setProviderStatus({
+        setPrompt("");
+        setAttachedFiles([]);
+        setCloudContextReviewAccepted(false);
+        setChatStatus({
           tone: "success",
           message:
-            contextCount > 0
-              ? `Last response came from ${result.data.provider} / ${result.data.model} using ${contextCount} local context chunk(s).`
-              : `Last response came from ${result.data.provider} / ${result.data.model}.`,
+            withAttachments.attachmentCount > 0
+              ? `Responded with ${result.data.provider} / ${result.data.model} using ${withAttachments.attachmentCount} attachment(s).`
+              : `Responded with ${result.data.provider} / ${result.data.model}.`,
         });
       } else {
-        setReply(null);
         setReplyError(result.error);
         addSessionEntry({
           id: makeSessionEntryId(),
@@ -1223,549 +1631,736 @@ function App() {
           model: targetProvider.model,
           error: result.error.message,
         });
-        setProviderStatus({
+        setChatStatus({
           tone: toneForProviderError(result.error),
           message: result.error.retryable
-            ? contextCount > 0
-              ? "Provider request failed after local context injection. Retry is available after you adjust settings, sources, or credentials."
-              : "Provider request failed. Retry is available after you adjust settings or credentials."
-            : contextCount > 0
-              ? "Provider request failed after local context injection. Review the provider and source index details before retrying."
-              : "Provider request failed. Review the provider status details before retrying.",
+            ? "Provider request failed. Adjust settings and retry."
+            : "Provider request failed. Inspect provider state before retrying.",
         });
       }
     } catch (err) {
-      setReply(null);
-      setReplyError(
-        localValidationError(err instanceof Error ? err.message : String(err)),
-      );
+      const error = localValidationError(err instanceof Error ? err.message : String(err));
+      setReplyError(error);
+      setChatStatus({
+        tone: "error",
+        message: error.message,
+      });
     } finally {
       setIsSending(false);
+      if (attachedFiles.length === 0) {
+        setCloudContextReviewAccepted(false);
+      }
     }
   }
 
-  const isProviderActionsDisabled =
-    isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
-  const isSourceActionsDisabled = removingSourceId.length > 0 || isBuildingSourceIndex;
+  async function handleAttachFiles(fileList: FileList | File[]) {
+    const nextFiles = Array.from(fileList);
+    if (nextFiles.length === 0) {
+      return;
+    }
+
+    const loaded = await Promise.all(nextFiles.map((file) => readAttachedPromptFile(file)));
+    setAttachedFiles((current) => [...current, ...loaded]);
+    setCloudContextReviewAccepted(false);
+    setChatStatus({
+      tone: "neutral",
+      message: `${loaded.length} attachment(s) added to the next prompt.`,
+    });
+  }
+
+  async function onFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    if (!event.currentTarget.files) {
+      return;
+    }
+
+    await handleAttachFiles(event.currentTarget.files);
+    event.currentTarget.value = "";
+  }
+
+  function removeAttachment(id: string) {
+    setAttachedFiles((current) => current.filter((file) => file.id !== id));
+    setCloudContextReviewAccepted(false);
+  }
+
+  function onComposerDragOver(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsDraggingFiles(true);
+  }
+
+  function onComposerDragLeave(event: DragEvent<HTMLFormElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsDraggingFiles(false);
+    }
+  }
+
+  async function onComposerDrop(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsDraggingFiles(false);
+    if (event.dataTransfer.files.length === 0) {
+      return;
+    }
+
+    await handleAttachFiles(event.dataTransfer.files);
+  }
+
+  const selectedProviderLabel = selectedProvider
+    ? `${selectedProvider.model || "model not set"} / ${selectedProvider.name}`
+    : "Set up a model";
 
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">AI Command Palette</p>
-          <h1>PilotBell</h1>
-          {shellState ? (
-            <p className="helper shortcut-line">
-              Shortcut: {shellState.activeShortcut}
-              {shellState.usedFallbackShortcut ? " (fallback)" : ""}
-            </p>
-          ) : null}
-        </div>
-        <span className="phase">Phase 4 Complete</span>
-      </header>
-
-      <section className="composer">
-        <div className="section-heading">
-          <div className="section-title">Provider settings</div>
-          <span className="status">
-            {editingProvider ? `Editing ${editingProvider.name}` : "New provider"}
-          </span>
-        </div>
-        <p className="helper">
-          Provider metadata stays in PilotBell storage. API keys are saved separately in the
-          OS credential store through Rust/Tauri. The adapter path is now keyed by provider
-          type, including {providerKindLabel(DEFAULT_PROVIDER_KIND)},{" "}
-          {providerKindLabel(ANTHROPIC_PROVIDER_KIND)}, {providerKindLabel(OLLAMA_PROVIDER_KIND)},
-          and {providerKindLabel(LLAMA_CPP_PROVIDER_KIND)}.
-        </p>
-        <div className="grid">
-          <select
-            value={providerDraft.kind}
-            onChange={(event) =>
-              setProviderDraft({
-                ...providerDraft,
-                kind: event.currentTarget.value as ProviderKind,
-              })
-            }
-          >
-            {PROVIDER_KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <input
-            value={providerDraft.name}
-            onChange={(event) =>
-              setProviderDraft({ ...providerDraft, name: event.currentTarget.value })
-            }
-            placeholder="Display name"
-          />
-          <input
-            value={providerDraft.model}
-            onChange={(event) =>
-              setProviderDraft({ ...providerDraft, model: event.currentTarget.value })
-            }
-            placeholder="Model (e.g. gpt-5.4-mini)"
-          />
-          <input
-            value={providerDraft.endpoint}
-            onChange={(event) =>
-              setProviderDraft({ ...providerDraft, endpoint: event.currentTarget.value })
-            }
-            placeholder="Endpoint URL"
-          />
-          <input
-            type="password"
-            value={providerDraft.apiKey}
-            onChange={(event) =>
-              setProviderDraft({ ...providerDraft, apiKey: event.currentTarget.value })
-            }
-            placeholder={
-              providerDraftRequiresApiKey
-                ? editingProvider
-                  ? "New API key (optional)"
-                  : "API key"
-                : "API key not required"
-            }
-            disabled={!providerDraftRequiresApiKey}
-          />
-        </div>
-        <div className="capability-list" aria-label="Provider capabilities">
-          {getProviderCapabilities(providerDraft.kind).map((capability) => (
-            <span key={capability.label} className="capability" title={capability.detail}>
-              {capability.label}
-            </span>
-          ))}
-        </div>
-        <div className="actions">
-          <button type="button" onClick={applyOpenAIPreset} disabled={isProviderActionsDisabled}>
-            Use OpenAI preset
-          </button>
-          <button
-            type="button"
-            onClick={applyAnthropicPreset}
-            disabled={isProviderActionsDisabled}
-          >
-            Use Anthropic preset
-          </button>
-          <button type="button" onClick={applyOllamaPreset} disabled={isProviderActionsDisabled}>
-            Use Ollama preset
-          </button>
-          <button
-            type="button"
-            onClick={applyLlamaCppPreset}
-            disabled={isProviderActionsDisabled}
-          >
-            Use llama.cpp preset
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              editingProvider ? void updateProvider() : void addProvider()
-            }
-            disabled={!isTauriRuntime || isProviderActionsDisabled}
-          >
-            {isSavingProvider
-              ? editingProvider
-                ? "Updating..."
-                : "Saving..."
-              : editingProvider
-                ? "Update provider"
-                : "Save provider"}
-          </button>
-          {editingProvider ? (
-            <button
-              type="button"
-              className="secondary"
-              onClick={cancelProviderEdit}
-              disabled={isProviderActionsDisabled}
-            >
-              Cancel edit
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void testProvider()}
-            disabled={
-              !isTauriRuntime ||
-              isProviderActionsDisabled ||
-              isTestingProvider ||
-              !selectedProvider
-            }
-          >
-            {isTestingProvider ? "Testing..." : "Test API"}
-          </button>
-          <span className="status">{providers.length} provider metadata record(s) saved locally</span>
-        </div>
-        {providerStatus ? (
-          <div className={`notice notice-${providerStatus.tone}`}>{providerStatus.message}</div>
-        ) : null}
-
-        {providers.length > 0 ? (
-          <ul className="provider-list">
-            {providers.map((provider) => {
-              const health = providerHealthRecords[provider.id];
-              const readiness = health?.readiness ?? "unknown";
-
-              return (
-                <li key={provider.id}>
-                  <button
-                    type="button"
-                    className={provider.id === selectedProviderId ? "provider active" : "provider"}
-                    onClick={() => setSelectedProviderId(provider.id)}
-                    disabled={!isTauriRuntime || isProviderActionsDisabled}
-                  >
-                    <span>
-                      {provider.name} / {provider.model} / {providerKindLabel(provider.kind)}
-                    </span>
-                    <span className={`readiness readiness-${readiness}`}>
-                      {readinessLabel(readiness)}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => beginEditProvider(provider)}
-                    disabled={!isTauriRuntime || isProviderActionsDisabled}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() => void removeProvider(provider.id)}
-                    disabled={!isTauriRuntime || isProviderActionsDisabled}
-                  >
-                    {removingProviderId === provider.id ? "Removing..." : "Remove"}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="empty">
-            {!isTauriRuntime
-              ? "Open PilotBell through Tauri to save and test providers."
-              : isMigratingProviders
-                ? "Migrating saved providers into the OS credential store..."
-                : "Save a provider, select it, then test the API."}
-          </p>
-        )}
-      </section>
-
-      <section className="composer">
-        <div className="section-heading">
-          <div className="section-title">Local source registration</div>
-          <span className="status">
-            {editingSource ? `Editing ${editingSource.name}` : "New source"}
-          </span>
-        </div>
-        <p className="helper">
-          Register folders or files that should become part of the local knowledge pipeline.
-          Build the local index after source changes so PilotBell can inject matching context
-          into outgoing prompts.
-        </p>
-        <div className="grid">
-          <select
-            value={sourceDraft.kind}
-            onChange={(event) =>
-              setSourceDraft({
-                ...sourceDraft,
-                kind: event.currentTarget.value as LocalSourceKind,
-              })
-            }
-          >
-            {SOURCE_KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <input
-            value={sourceDraft.name}
-            onChange={(event) =>
-              setSourceDraft({ ...sourceDraft, name: event.currentTarget.value })
-            }
-            placeholder="Source name"
-          />
-          <input
-            value={sourceDraft.path}
-            onChange={(event) =>
-              setSourceDraft({ ...sourceDraft, path: event.currentTarget.value })
-            }
-            placeholder="Path (e.g. C:\\Users\\...\\Docs)"
-          />
-          <input
-            value={sourceDraft.notes}
-            onChange={(event) =>
-              setSourceDraft({ ...sourceDraft, notes: event.currentTarget.value })
-            }
-            placeholder="Notes (optional)"
-          />
-        </div>
-        <div className="actions">
-          <button
-            type="button"
-            onClick={saveSource}
-            disabled={!isTauriRuntime || isSourceActionsDisabled}
-          >
-            {editingSource ? "Update source" : "Save source"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void buildSourceIndex()}
-            disabled={!isTauriRuntime || isSourceActionsDisabled || localSources.length === 0}
-          >
-            {isBuildingSourceIndex ? "Indexing..." : "Build index"}
-          </button>
-          {editingSource ? (
-            <button
-              type="button"
-              className="secondary"
-              onClick={cancelSourceEdit}
-              disabled={isSourceActionsDisabled}
-            >
-              Cancel edit
-            </button>
-          ) : null}
-          <span className="status">
-            {localSources.length} local source(s) registered
-            {sourceIndexSnapshot
-              ? ` / ${sourceIndexSnapshot.documentCount} documents / ${sourceIndexSnapshot.chunkCount} chunks / built ${formatSessionTime(sourceIndexSnapshot.builtAt)}`
-              : " / index not built"}
-          </span>
-        </div>
-        {sourceStatus ? (
-          <div className={`notice notice-${sourceStatus.tone}`}>{sourceStatus.message}</div>
-        ) : null}
-
-        {localSources.length > 0 ? (
-          <ul className="source-list">
-            {localSources.map((source) => (
-              <li key={source.id} className="source-item">
-                <div className="source-main">
-                  <div className="source-meta">
-                    <span className="capability">{source.kind === DIRECTORY_SOURCE_KIND ? "Directory" : "File"}</span>
-                    <span className="status">{source.name}</span>
-                  </div>
-                  <p className="source-path">{source.path}</p>
-                  {source.notes ? <p className="source-notes">{source.notes}</p> : null}
+    <>
+      <main className="shell">
+        <div className="window-shell">
+          <header className="window-header" data-tauri-drag-region>
+            <div className="window-title" data-tauri-drag-region>
+              <div className="window-title-copy">
+                <span className="window-badge">PilotBell</span>
+                <div>
+                  <h1>Ask once, act fast.</h1>
+                  <p>
+                    {shellState?.activeShortcut
+                      ? `Shortcut: ${shellState.activeShortcut}${shellState.usedFallbackShortcut ? " (fallback)" : ""}`
+                      : "Rust-native document workflow"}
+                  </p>
                 </div>
-                <div className="history-actions">
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => beginEditSource(source)}
-                    disabled={!isTauriRuntime || isSourceActionsDisabled}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() => removeSource(source.id)}
-                    disabled={!isTauriRuntime || isSourceActionsDisabled}
-                  >
-                    {removingSourceId === source.id ? "Removing..." : "Remove"}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="empty">
-            {!isTauriRuntime
-              ? "Open PilotBell through Tauri to register local sources."
-              : "Register a folder or file to start shaping the local knowledge set."}
-          </p>
-        )}
-      </section>
-
-      <form
-        className="composer"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void sendPrompt();
-        }}
-      >
-        <label htmlFor="prompt">Prompt</label>
-        <textarea
-          id="prompt"
-          ref={promptRef}
-          value={prompt}
-          onChange={(event) => setPrompt(event.currentTarget.value)}
-          placeholder="Ask PilotBell..."
-          rows={6}
-        />
-        <div className="actions">
-          <span className="status">
-            {selectedProvider
-              ? `${selectedProvider.name} / ${selectedProvider.model}`
-              : "Select provider"}
-          </span>
-          <button
-            type="submit"
-            disabled={
-              isSending ||
-              !isTauriRuntime ||
-              isMigratingProviders ||
-              !selectedProvider ||
-              !prompt.trim()
-            }
-          >
-            {isSending ? "Sending..." : "Send"}
-          </button>
-        </div>
-      </form>
-
-      <section className="health-panel">
-        <div className="section-heading">
-          <div className="section-title">Provider readiness and capabilities</div>
-          <span className="status">
-            {selectedProvider ? selectedProvider.name : "No provider selected"}
-          </span>
-        </div>
-        {selectedProvider ? (
-          <div className="health-stack">
-            <div className="capability-list">
-              {selectedProviderCapabilities.map((capability) => (
-                <span key={capability.label} className="capability" title={capability.detail}>
-                  {capability.label}
-                </span>
-              ))}
-            </div>
-            {selectedProviderHealth ? (
-              <div className="health-detail">
-                <span className={`readiness readiness-${selectedProviderHealth.readiness}`}>
-                  {readinessLabel(selectedProviderHealth.readiness)}
-                </span>
-                <span>{selectedProviderHealth.message}</span>
-                <span className="status">
-                  Checked {formatRelativeTime(selectedProviderHealth.checkedAt)}
-                  {selectedProviderHealth.latencyMs
-                    ? ` / ${selectedProviderHealth.latencyMs} ms`
-                    : ""}
-                  {selectedProviderHealth.errorKind
-                    ? ` / ${selectedProviderHealth.errorKind}`
-                    : ""}
-                  {selectedProviderHealth.statusCode
-                    ? ` / HTTP ${selectedProviderHealth.statusCode}`
-                    : ""}
-                  {selectedProviderHealth.retryable ? " / retryable" : ""}
-                </span>
               </div>
-            ) : (
-              <p className="empty">Run Test API to record readiness for this provider.</p>
-            )}
-          </div>
-        ) : (
-          <p className="empty">Select a provider to inspect readiness.</p>
-        )}
-      </section>
+            </div>
+            <div className="window-actions">
+              <div className="theme-switcher" role="group" aria-label="Theme">
+                {THEME_OPTIONS.map((option, index) => {
+                  const Icon = option.icon;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={
+                        option.value === themePreference ? "theme-option active" : "theme-option"
+                      }
+                      style={{ ["--theme-index" as string]: String(index) }}
+                      onClick={() => persistThemePreference(option.value)}
+                      aria-pressed={option.value === themePreference}
+                      title={
+                        option.value === "system"
+                          ? `Follow system theme. Current: ${resolvedTheme}.`
+                          : `${option.label} theme`
+                      }
+                    >
+                      <Icon />
+                    </button>
+                  );
+                })}
+              </div>
 
-      <section className="response" aria-live="polite">
-        <div className="section-heading">
-          <div className="section-title">Response</div>
-          <div className="inline-actions">
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                if (latestSessionEntry) {
-                  retrySessionEntry(latestSessionEntry);
-                }
-              }}
-              disabled={isSending || !latestSessionEntry || !isTauriRuntime}
-            >
-              Retry last
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                if (reply) {
-                  void copyText(reply.content, "Response");
-                }
-              }}
-              disabled={!reply}
-            >
-              Copy response
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={clearSession}
-              disabled={sessionEntries.length === 0 && !reply && !replyError}
-            >
-              Clear session
-            </button>
-          </div>
-        </div>
-        {replyError ? (
-          <div className="response-stack">
-            <pre className="error">{replyError.message}</pre>
-            {replyError.details ? <pre className="detail">{replyError.details}</pre> : null}
-            <p className="helper">
-              Error kind: {replyError.kind}
-              {replyError.statusCode ? ` / HTTP ${replyError.statusCode}` : ""}
-              {replyError.retryable ? " / retryable" : ""}
-            </p>
-          </div>
-        ) : reply ? (
-          <pre>{reply.content}</pre>
-        ) : (
-          <p className="empty">Waiting for a prompt.</p>
-        )}
-      </section>
+              <button
+                type="button"
+                className="window-icon-button"
+                onClick={() => openSettings("providers")}
+                aria-label="Open settings"
+              >
+                <SettingsIcon />
+              </button>
+              <button
+                type="button"
+                className="window-icon-button"
+                onClick={() => void getCurrentWindow().minimize()}
+                aria-label="Minimize window"
+              >
+                <MinusIcon />
+              </button>
+              <button
+                type="button"
+                className="window-icon-button"
+                onClick={() => void getCurrentWindow().toggleMaximize()}
+                aria-label="Toggle maximize"
+              >
+                <SquareIcon />
+              </button>
+              <button
+                type="button"
+                className="window-icon-button danger"
+                onClick={() => void getCurrentWindow().close()}
+                aria-label="Close window"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          </header>
 
-      <section className="history">
-        <div className="section-heading">
-          <div className="section-title">Prompt history</div>
-          <span className="status">{sessionEntries.length} recent item(s)</span>
+          <section className="workspace">
+            <div className="chat-surface">
+              <SessionHistory
+                entries={chatEntries}
+                shouldPromptInitialSetup={shouldPromptInitialSetup}
+                isSending={isSending}
+                isTauriRuntime={isTauriRuntime}
+                formatSessionTime={formatSessionTime}
+                onRetry={retrySessionEntry}
+                onCopy={(text, label) => void copyText(text, label)}
+              />
+
+              <PromptComposer
+                prompt={prompt}
+                setPrompt={setPrompt}
+                attachedFiles={attachedFiles}
+                isDraggingFiles={isDraggingFiles}
+                isSending={isSending}
+                isTauriRuntime={isTauriRuntime}
+                isMigratingProviders={isMigratingProviders}
+                isProviderActionsDisabled={isProviderActionsDisabled}
+                isTestingProvider={isTestingProvider}
+                shouldPromptInitialSetup={shouldPromptInitialSetup}
+                selectedProvider={selectedProvider}
+                selectedProviderId={selectedProviderId}
+                selectedProviderLabel={selectedProviderLabel}
+                selectedProviderHealth={selectedProviderHealth}
+                providers={providers}
+                providerHealthRecords={providerHealthRecords}
+                providerMenuOpen={providerMenuOpen}
+                sessionEntryCount={sessionEntries.length}
+                fileInputRef={fileInputRef}
+                promptRef={promptRef}
+                providerMenuRef={providerMenuRef}
+                icons={{
+                  Attach: AttachIcon,
+                  ArrowUp: ArrowUpIcon,
+                  ChevronDown: ChevronDownIcon,
+                  Close: CloseIcon,
+                }}
+                formatBytes={formatBytes}
+                readinessLabel={readinessLabel}
+                setProviderMenuOpen={setProviderMenuOpen}
+                setSelectedProviderId={setSelectedProviderId}
+                onSubmitPrompt={() => void sendPrompt()}
+                onFileInputChange={(event) => void onFileInputChange(event)}
+                onDragOver={onComposerDragOver}
+                onDragLeave={onComposerDragLeave}
+                onDrop={(event) => void onComposerDrop(event)}
+                removeAttachment={removeAttachment}
+                openProviderSettings={() => openSettings("providers")}
+                testProvider={() => void testProvider()}
+                clearSession={clearSession}
+              />
+
+              {chatStatus ? (
+                <div className={`notice notice-${chatStatus.tone}`}>{chatStatus.message}</div>
+              ) : null}
+              {replyError?.details ? <pre className="detail">{replyError.details}</pre> : null}
+            </div>
+          </section>
         </div>
-        {sessionEntries.length > 0 ? (
-          <ol className="history-list">
-            {sessionEntries.map((entry) => (
-              <li key={entry.id} className="history-item">
-                <div className="history-main">
-                  <div className="history-meta">
-                    {formatSessionTime(entry.createdAt)} / {entry.providerName} / {entry.model}
+      </main>
+
+      {shouldShowSettings ? (
+        <div className="settings-overlay">
+          <div className="settings-panel" ref={settingsPanelRef}>
+            <div className="settings-header">
+              <div>
+                <p className="eyebrow">Settings</p>
+                <h2>{shouldPromptInitialSetup ? "First run setup" : "PilotBell settings"}</h2>
+                <p className="helper">
+                  {shouldPromptInitialSetup
+                    ? "PilotBell detected no proven-ready provider yet. Save and test one provider to move into the compact prompt-only surface."
+                    : "Provider and document workflow controls stay here so the main surface can remain focused."}
+                </p>
+              </div>
+              {!shouldPromptInitialSetup ? (
+                <button
+                  type="button"
+                  className="window-icon-button"
+                  onClick={closeSettings}
+                  aria-label="Close settings"
+                >
+                  <CloseIcon />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="settings-tabs">
+              <button
+                type="button"
+                className={settingsSection === "providers" ? "settings-tab active" : "settings-tab"}
+                onClick={() => setSettingsSection("providers")}
+              >
+                Providers
+              </button>
+              <button
+                type="button"
+                className={settingsSection === "documents" ? "settings-tab active" : "settings-tab"}
+                onClick={() => setSettingsSection("documents")}
+              >
+                Documents
+              </button>
+              <button
+                type="button"
+                className={settingsSection === "sources" ? "settings-tab active" : "settings-tab"}
+                onClick={() => setSettingsSection("sources")}
+              >
+                Sources
+              </button>
+            </div>
+
+            {settingsSection === "providers" ? (
+              <div className="settings-section">
+                <div className="settings-summary-card">
+                  <div>
+                    <h3>Provider routing</h3>
+                    <p>
+                      Hosted and local providers live behind the same prompt surface. Settings only stay open by default until PilotBell sees a ready provider or a successful run.
+                    </p>
                   </div>
-                  <p className="history-prompt">{entry.prompt}</p>
-                  {entry.response ? (
-                    <p className="history-preview">{entry.response}</p>
-                  ) : entry.error ? (
-                    <p className="history-error">{entry.error}</p>
+                  <div className="capability-list" aria-label="Provider capabilities">
+                    {getProviderCapabilities(providerDraft.kind).map((capability) => (
+                      <span key={capability.label} className="capability" title={capability.detail}>
+                        {capability.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="settings-grid">
+                  <select
+                    value={providerDraft.kind}
+                    onChange={(event) => {
+                      const kind = event.currentTarget.value as ProviderKind;
+                      setProviderDraft({
+                        ...providerDraft,
+                        kind,
+                        endpoint: officialEndpointForProvider(kind),
+                        advancedEndpoint: false,
+                      });
+                    }}
+                  >
+                    {PROVIDER_KIND_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={providerDraft.name}
+                    onChange={(event) =>
+                      setProviderDraft({ ...providerDraft, name: event.currentTarget.value })
+                    }
+                    placeholder="Display name"
+                  />
+                  <input
+                    value={providerDraft.model}
+                    onChange={(event) =>
+                      setProviderDraft({ ...providerDraft, model: event.currentTarget.value })
+                    }
+                    placeholder="Model available to your API key"
+                  />
+                  <select
+                    value=""
+                    onChange={(event) => {
+                      const model = event.currentTarget.value;
+                      if (model) {
+                        setProviderDraft({ ...providerDraft, model });
+                      }
+                    }}
+                  >
+                    <option value="">Model presets...</option>
+                    <option value="gpt-4.1-mini">OpenAI: gpt-4.1-mini</option>
+                    <option value="gpt-4.1">OpenAI: gpt-4.1</option>
+                    <option value="claude-sonnet-4-20250514">Anthropic: Claude Sonnet 4</option>
+                    <option value="llama3.2">Ollama: llama3.2</option>
+                    <option value="local-llama">llama.cpp: local-llama</option>
+                  </select>
+                  <input
+                    value={providerDraft.endpoint}
+                    onChange={(event) =>
+                      setProviderDraft({ ...providerDraft, endpoint: event.currentTarget.value })
+                    }
+                    placeholder="Endpoint URL"
+                  />
+                  <input
+                    type="password"
+                    value={providerDraft.apiKey}
+                    onChange={(event) =>
+                      setProviderDraft({ ...providerDraft, apiKey: event.currentTarget.value })
+                    }
+                    placeholder={
+                      providerDraftRequiresApiKey
+                        ? editingProvider
+                          ? "New API key (optional)"
+                          : "API key"
+                        : "API key not required"
+                    }
+                    disabled={!providerDraftRequiresApiKey}
+                  />
+                </div>
+
+                <p className="helper">
+                  Model availability depends on your provider account. If the provider test fails,
+                  choose a model available to your API key.
+                </p>
+
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={providerDraft.advancedEndpoint}
+                    onChange={(event) =>
+                      setProviderDraft({
+                        ...providerDraft,
+                        advancedEndpoint: event.currentTarget.checked,
+                      })
+                    }
+                  />
+                  Advanced endpoint mode
+                </label>
+                <div className={`notice notice-${providerEndpointRisk.tone}`}>
+                  {providerEndpointRisk.message}
+                </div>
+
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="button-preset"
+                    onClick={applyOpenAIPreset}
+                    disabled={isProviderActionsDisabled}
+                  >
+                    Use OpenAI preset
+                  </button>
+                  <button
+                    type="button"
+                    className="button-preset"
+                    onClick={applyAnthropicPreset}
+                    disabled={isProviderActionsDisabled}
+                  >
+                    Use Anthropic preset
+                  </button>
+                  <button
+                    type="button"
+                    className="button-preset"
+                    onClick={applyOllamaPreset}
+                    disabled={isProviderActionsDisabled}
+                  >
+                    Use Ollama preset
+                  </button>
+                  <button
+                    type="button"
+                    className="button-preset"
+                    onClick={applyLlamaCppPreset}
+                    disabled={isProviderActionsDisabled}
+                  >
+                    Use llama.cpp preset
+                  </button>
+                  <button
+                    type="button"
+                    className="button-save"
+                    onClick={() =>
+                      editingProvider ? void updateProvider() : void addProvider()
+                    }
+                    disabled={!isTauriRuntime || isProviderActionsDisabled}
+                  >
+                    {isSavingProvider
+                      ? editingProvider
+                        ? "Updating..."
+                        : "Saving..."
+                      : editingProvider
+                        ? "Update provider"
+                        : "Save provider"}
+                  </button>
+                  {editingProvider ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={cancelProviderEdit}
+                      disabled={isProviderActionsDisabled}
+                    >
+                      Cancel edit
+                    </button>
                   ) : null}
                 </div>
-                <div className="history-actions">
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => retrySessionEntry(entry)}
-                    disabled={isSending || !isTauriRuntime}
-                  >
-                    Retry
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() =>
-                      void copyText(entry.response ?? entry.error ?? entry.prompt, "History item")
+
+                {providerStatus ? (
+                  <div className={`notice notice-${providerStatus.tone}`}>{providerStatus.message}</div>
+                ) : null}
+
+                {providers.length > 0 ? (
+                  <ul className="provider-list">
+                    {providers.map((provider) => {
+                      const health = providerHealthRecords[provider.id];
+                      const readiness = health?.readiness ?? "unknown";
+                      return (
+                        <li key={provider.id}>
+                          <button
+                            type="button"
+                            className={provider.id === selectedProviderId ? "provider active" : "provider"}
+                            onClick={() => setSelectedProviderId(provider.id)}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            <span>
+                              {provider.name} / {provider.model || "model not set"} / {providerKindLabel(provider.kind)}
+                              {provider.advancedEndpoint ? " / advanced endpoint" : ""}
+                            </span>
+                            <span className={`readiness readiness-${readiness}`}>
+                              {readinessLabel(readiness)}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => beginEditProvider(provider)}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => void removeProvider(provider.id)}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            {removingProviderId === provider.id ? "Removing..." : "Remove"}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="empty">
+                    {!isTauriRuntime
+                      ? "Open PilotBell through Tauri to save and test providers."
+                      : isMigratingProviders
+                        ? "Migrating saved providers into the OS credential store..."
+                        : "Save a provider, select it, then test the API."}
+                  </p>
+                )}
+
+                {selectedProvider ? (
+                  <div className="provider-health-card">
+                    <div className="section-heading">
+                      <div className="section-title">Selected provider readiness</div>
+                      <span className="status">{selectedProvider.name}</span>
+                    </div>
+                    <div className="capability-list">
+                      {selectedProviderCapabilities.map((capability) => (
+                        <span key={capability.label} className="capability" title={capability.detail}>
+                          {capability.label}
+                        </span>
+                      ))}
+                    </div>
+                    {selectedProviderHealth ? (
+                      <div className="health-detail">
+                        <span className={`readiness readiness-${selectedProviderHealth.readiness}`}>
+                          {readinessLabel(selectedProviderHealth.readiness)}
+                        </span>
+                        <span>{selectedProviderHealth.message}</span>
+                        <span className="status">
+                          Checked {formatRelativeTime(selectedProviderHealth.checkedAt)}
+                          {selectedProviderHealth.latencyMs
+                            ? ` / ${selectedProviderHealth.latencyMs} ms`
+                            : ""}
+                          {selectedProviderHealth.errorKind
+                            ? ` / ${selectedProviderHealth.errorKind}`
+                            : ""}
+                          {selectedProviderHealth.statusCode
+                            ? ` / HTTP ${selectedProviderHealth.statusCode}`
+                            : ""}
+                          {selectedProviderHealth.retryable ? " / retryable" : ""}
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="empty">Run Test API to record readiness for this provider.</p>
+                    )}
+                    <div className="settings-actions">
+                      <button
+                        type="button"
+                        className="button-test"
+                        onClick={() => void testProvider()}
+                        disabled={
+                          !isTauriRuntime ||
+                          isProviderActionsDisabled ||
+                          isTestingProvider ||
+                          !selectedProvider
+                        }
+                      >
+                        {isTestingProvider ? "Testing..." : "Test API"}
+                      </button>
+                      {providerRequiresApiKey(selectedProvider.kind) ? (
+                        <>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => void diagnoseSelectedProviderSecret()}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            Diagnose secret
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => beginEditProvider(selectedProvider)}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            Re-save secret
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => void repairSelectedProviderSecretMetadata()}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            Repair provider
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => void deleteSelectedProviderSecretOnly()}
+                            disabled={!isTauriRuntime || isProviderActionsDisabled}
+                          >
+                            Delete secret
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : settingsSection === "documents" ? (
+              <DocumentWorkflowPanel
+                draft={documentJobs.draft}
+                setDraft={documentJobs.setDraft}
+                jobs={documentJobs.jobs}
+                providers={providers}
+                progress={documentJobs.activeProgress ?? documentJobs.latestProgress}
+                statusMessage={documentJobs.statusMessage}
+                isRunning={documentJobs.isRunning}
+                isTauriRuntime={isTauriRuntime}
+                onStart={() => void documentJobs.startJob()}
+                onCancel={() => void documentJobs.cancelActiveJob()}
+                onClear={documentJobs.clearJobs}
+              />
+            ) : (
+              <div className="settings-section">
+                <div className="settings-summary-card">
+                  <div>
+                    <h3>Deprecated local sources</h3>
+                    <p>
+                      Persistent local source indexing is deprecated. New document workflows process
+                      user-selected files temporarily and do not store extracted text or chunks.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="settings-grid">
+                  <select
+                    value={sourceDraft.kind}
+                    onChange={(event) =>
+                      setSourceDraft({
+                        ...sourceDraft,
+                        kind: event.currentTarget.value as LocalSourceKind,
+                      })
                     }
                   >
-                    Copy
-                  </button>
+                    {SOURCE_KIND_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={sourceDraft.name}
+                    onChange={(event) =>
+                      setSourceDraft({ ...sourceDraft, name: event.currentTarget.value })
+                    }
+                    placeholder="Source name"
+                  />
+                  <input
+                    value={sourceDraft.path}
+                    onChange={(event) =>
+                      setSourceDraft({ ...sourceDraft, path: event.currentTarget.value })
+                    }
+                    placeholder="Path (e.g. C:\\Users\\...\\Docs)"
+                  />
+                  <input
+                    value={sourceDraft.notes}
+                    onChange={(event) =>
+                      setSourceDraft({ ...sourceDraft, notes: event.currentTarget.value })
+                    }
+                    placeholder="Notes (optional)"
+                  />
                 </div>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="empty">Recent prompts will appear here after the first response.</p>
-        )}
-      </section>
-    </main>
+
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="button-save"
+                    onClick={saveSource}
+                    disabled={!isTauriRuntime || isSourceActionsDisabled}
+                  >
+                    {editingSource ? "Update source" : "Save source"}
+                  </button>
+                  {editingSource ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={cancelSourceEdit}
+                      disabled={isSourceActionsDisabled}
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+
+                {sourceStatus ? (
+                  <div className={`notice notice-${sourceStatus.tone}`}>{sourceStatus.message}</div>
+                ) : null}
+
+                <p className="status">
+                  {localSources.length} deprecated local source registration(s). Persistent index
+                  snapshots are cleared on startup.
+                </p>
+
+                {localSources.length > 0 ? (
+                  <ul className="source-list">
+                    {localSources.map((source) => (
+                      <li key={source.id} className="source-item">
+                        <div className="source-main">
+                          <div className="source-meta">
+                            <span className="capability">
+                              {source.kind === DIRECTORY_SOURCE_KIND ? "Directory" : "File"}
+                            </span>
+                            <span className="status">{source.name}</span>
+                          </div>
+                          <p className="source-path">{source.path}</p>
+                          {source.notes ? <p className="source-notes">{source.notes}</p> : null}
+                        </div>
+                        <div className="history-actions">
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => beginEditSource(source)}
+                            disabled={!isTauriRuntime || isSourceActionsDisabled}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger"
+                            onClick={() => removeSource(source.id)}
+                            disabled={!isTauriRuntime || isSourceActionsDisabled}
+                          >
+                            {removingSourceId === source.id ? "Removing..." : "Remove"}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="empty">
+                    {!isTauriRuntime
+                      ? "Open PilotBell through Tauri to register local sources."
+                      : "Use the Documents tab for temporary per-workflow processing."}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

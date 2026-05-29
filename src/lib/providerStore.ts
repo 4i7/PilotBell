@@ -35,6 +35,7 @@ function normalizeProviderMetadata(value: unknown): ProviderConfig | null {
     endpoint: item.endpoint,
     model: item.model,
     hasSecret: item.hasSecret,
+    advancedEndpoint: typeof item.advancedEndpoint === "boolean" ? item.advancedEndpoint : false,
   };
 }
 
@@ -62,6 +63,7 @@ function normalizeLegacyProvider(value: unknown): LegacyProviderConfig | null {
     apiKey: item.apiKey,
     model: item.model,
     hasSecret: typeof item.hasSecret === "boolean" ? item.hasSecret : undefined,
+    advancedEndpoint: typeof item.advancedEndpoint === "boolean" ? item.advancedEndpoint : undefined,
   };
 }
 

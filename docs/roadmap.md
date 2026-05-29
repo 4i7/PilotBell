@@ -2,67 +2,62 @@
 
 ## Product Direction
 
-PilotBell is a desktop AI command palette built with Tauri v2, Rust, React, and TypeScript.
-The app is intentionally desktop-first: provider secrets, global shortcuts, and window behavior
-are handled on the Rust/Tauri side instead of in a browser-only shell.
+PilotBell is a Rust-native document processing desktop app built with Tauri v2, Rust, React, and TypeScript.
 
-## Phase Breakdown
+The app focuses on local document workflows: PDF structure inspection, Excel data extraction and validation, Markdown review IR, sanitized SVG diagrams, and DOCX report generation. LLM providers are optional helpers for draft wording and report shaping, not autonomous planners.
 
-### Phase 1 - MVP shell
+## Completed Foundation
 
-- [x] Provider registration UI
-- [x] Prompt send flow through a registered provider
-- [x] Provider test command
-- [x] Local provider metadata persistence
+- [x] Tauri v2 desktop shell with global shortcut and compact palette behavior
+- [x] Provider registration, edit flow, readiness display, and health checks
+- [x] OS credential-store storage for provider API keys
+- [x] Hosted provider adapters for OpenAI Responses and Anthropic Messages
+- [x] Local provider adapters for Ollama and llama.cpp
+- [x] Prompt history, retry, copy, and clear-session actions
+- [x] Deprecated persistent local source index snapshots and clear them from active workflow state
 
-### Phase 2 - Desktop foundation
+## Current Phase - Rust Document Workflow
 
-- [x] Move provider API keys out of browser localStorage into OS credential storage
-- [x] Add structured provider errors with validation / network / timeout / response categories
-- [x] Route prompt send and provider test through a provider adapter layer
-- [x] Add global shortcut registration with fallback handling
-- [x] Add command-palette window behavior: prompt refocus, Escape hide, and window-state restore
+- [x] Add `lopdf`, `calamine`, and `docx-rs`
+- [x] Add `src-tauri/src/document/` module boundary
+- [x] Add PDF structure/page inspection and best-effort text preview
+- [x] Add Excel sheet/range preview and validation summary without formula evaluation
+- [x] Add Markdown, sanitized SVG, and DOCX output generation
+- [x] Add Tauri document progress event handling
+- [x] Add lightweight document job metadata persistence only
+- [x] Add provider endpoint advanced-mode warnings
+- [x] Add credential-store diagnosis, repair, re-save, and delete UI
 
-### Phase 3 - Daily-use UX
+## Next Slices
 
-- [x] Add prompt history, retry, copy, and clear-session actions
-- [x] Improve provider status UX with richer health/readiness data
-- [x] Add provider edit flow and per-provider capability display
-- [x] Add hosted and local adapters beyond OpenAI Responses (OpenAI Responses, Anthropic Messages, Ollama, and llama.cpp now ship through the shared adapter layer)
+- Add richer context preview before LLM-assisted report drafting.
+- Add more document templates and template-specific DOCX styling.
+- Improve PDF extraction quality while preserving temporary processing boundaries.
+- Add focused frontend component extraction around provider settings and prompt/session surfaces.
+- Add end-to-end UI verification for document progress, cancellation, and provider warning flows.
 
-### Phase 4 - Local knowledge
+## Explicit Non-Goals
 
-- [x] Add local source registration
-- [x] Add indexing and retrieval storage
-- [x] Inject retrieved context into the provider request pipeline
-
-## Current Implementation Areas
-
-### Frontend
-
-- `src/domain/provider.ts` - provider metadata types and normalization
-- `src/domain/source.ts` - local source registration types and normalization
-- `src/lib/providerStore.ts` - browser-side provider metadata persistence
-- `src/lib/sourceStore.ts` - local source registration persistence
-- `src/lib/sourceIndexStore.ts` - local source index snapshot persistence
-- `src/lib/sessionStore.ts` - local prompt session persistence
-- `src/App.tsx` - provider UI, command status, and prompt interaction flow
-
-### Backend
-
-- `src-tauri/src/lib.rs` - provider validation, secure secret access, adapter dispatch,
-  prompt handling, shortcut registration, and window toggle logic
-- `src-tauri/tauri.conf.json` - desktop window and bundling configuration
+- No general-purpose AI agent framework
+- No multi-agent orchestration
+- No autonomous agent planner
+- No advanced RAG, embedding search, or retrieval ranking expansion
+- No persistent local knowledge-base indexing tool
+- No direction that competes with Hermes-Agent / OpenClaw
 
 ## Validation Baseline
 
 - `npm run build`
+- `cargo fmt --manifest-path src-tauri/Cargo.toml --check`
 - `cargo check --manifest-path src-tauri/Cargo.toml`
 - `cargo test --manifest-path src-tauri/Cargo.toml`
+- `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
 - `npm run tauri build`
+- `git diff --check`
 
 ## Operating Assumptions
 
-- Windows 11 is the primary validation target.
+- Windows is the primary packaging validation target.
 - The supported Rust toolchain is `stable-msvc`.
-- Linux-native desktop failures are not blockers for the Windows packaging path.
+- Document contents are untrusted input.
+- Extracted document text, chunks, and LLM context are temporary workflow data and are not stored in browser storage.

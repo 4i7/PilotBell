@@ -1,10 +1,16 @@
+mod document;
+
+use document::workflow::{
+    cancel_document_job as cancel_document_job_impl,
+    start_document_workflow as start_document_workflow_impl, DocumentJobState,
+};
+use document::{DocumentJobMetadata, DocumentWorkflowRequest, DocumentWorkflowResult};
 use keyring::{Entry, Error as KeyringError};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::borrow::Cow;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -16,14 +22,12 @@ const OPENAI_RESPONSES_KIND: &str = "openai-responses";
 const ANTHROPIC_MESSAGES_KIND: &str = "anthropic-messages";
 const OLLAMA_KIND: &str = "ollama";
 const LLAMA_CPP_KIND: &str = "llama-cpp";
+const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION_HEADER: &str = "2023-06-01";
 const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
 const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
 const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
-const MAX_INDEXED_DOCUMENTS: usize = 200;
-const MAX_FILE_BYTES: usize = 200_000;
-const CHUNK_SIZE: usize = 1_200;
-const CHUNK_OVERLAP: usize = 200;
 
 #[derive(Serialize)]
 struct AssistantReply {
@@ -41,6 +45,8 @@ struct ProviderConfig {
     endpoint: String,
     model: String,
     has_secret: bool,
+    #[serde(default)]
+    advanced_endpoint: bool,
 }
 
 #[derive(Deserialize)]
@@ -48,24 +54,6 @@ struct ProviderConfig {
 struct ProviderSecretInput {
     provider_id: String,
     api_key: String,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct LocalSourceInput {
-    id: String,
-    kind: String,
-    name: String,
-    path: String,
-    notes: Option<String>,
-}
-
-#[derive(Clone)]
-struct SourceDocument {
-    source_id: String,
-    source_name: String,
-    path: String,
-    text: String,
 }
 
 #[derive(Deserialize)]
@@ -165,22 +153,9 @@ struct ProviderSecretStatus {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct IndexedSourceChunk {
-    id: String,
-    source_id: String,
-    source_name: String,
-    path: String,
-    snippet: String,
-    text: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SourceIndexBuildResult {
-    source_count: usize,
-    document_count: usize,
-    chunk_count: usize,
-    chunks: Vec<IndexedSourceChunk>,
+struct ProviderSecretDiagnosis {
+    provider_id: String,
+    has_secret: bool,
     message: String,
 }
 
@@ -313,36 +288,59 @@ fn validate_provider(provider: &ProviderConfig) -> Result<ProviderAdapter, Provi
 fn validate_openai_responses_provider(
     provider: &ProviderConfig,
 ) -> Result<(), ProviderCommandError> {
-    if !provider.endpoint.starts_with("https://") {
-        return Err(ProviderCommandError::new(
-            ProviderErrorKind::Validation,
-            "Provider endpoint must start with https://",
-            false,
-        ));
-    }
-
-    Ok(())
+    validate_hosted_endpoint(provider, OPENAI_RESPONSES_ENDPOINT, "OpenAI Responses")
 }
 
 fn validate_anthropic_messages_provider(
     provider: &ProviderConfig,
 ) -> Result<(), ProviderCommandError> {
-    if !provider.endpoint.starts_with("https://") {
-        return Err(ProviderCommandError::new(
-            ProviderErrorKind::Validation,
-            "Anthropic endpoint must start with https://",
-            false,
-        ));
-    }
-
-    Ok(())
+    validate_hosted_endpoint(provider, ANTHROPIC_MESSAGES_ENDPOINT, "Anthropic Messages")
 }
 
 fn validate_ollama_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
-    if !(provider.endpoint.starts_with("http://") || provider.endpoint.starts_with("https://")) {
+    validate_local_endpoint(provider, "Ollama")
+}
+
+fn validate_llama_cpp_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
+    validate_local_endpoint(provider, "llama.cpp")
+}
+
+fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderCommandError> {
+    Url::parse(endpoint.trim()).map_err(|error| {
+        ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            format!("Provider endpoint is not a valid URL: {error}"),
+            false,
+        )
+    })
+}
+
+fn normalized_endpoint(endpoint: &str) -> String {
+    endpoint.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn validate_hosted_endpoint(
+    provider: &ProviderConfig,
+    official_endpoint: &str,
+    label: &str,
+) -> Result<(), ProviderCommandError> {
+    let parsed = parse_endpoint(&provider.endpoint)?;
+    if parsed.scheme() != "https" {
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
-            "Ollama endpoint must start with http:// or https://",
+            format!("{label} endpoint must use https://."),
+            false,
+        ));
+    }
+
+    if normalized_endpoint(&provider.endpoint) == normalized_endpoint(official_endpoint) {
+        return Ok(());
+    }
+
+    if !provider.advanced_endpoint {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            format!("{label} custom endpoints require advanced mode because cloud API keys would be sent to a non-standard URL."),
             false,
         ));
     }
@@ -350,16 +348,41 @@ fn validate_ollama_provider(provider: &ProviderConfig) -> Result<(), ProviderCom
     Ok(())
 }
 
-fn validate_llama_cpp_provider(provider: &ProviderConfig) -> Result<(), ProviderCommandError> {
-    if !(provider.endpoint.starts_with("http://") || provider.endpoint.starts_with("https://")) {
+fn validate_local_endpoint(
+    provider: &ProviderConfig,
+    label: &str,
+) -> Result<(), ProviderCommandError> {
+    let parsed = parse_endpoint(&provider.endpoint)?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(ProviderCommandError::new(
             ProviderErrorKind::Validation,
-            "llama.cpp endpoint must start with http:// or https://",
+            format!("{label} endpoint must start with http:// or https://."),
+            false,
+        ));
+    }
+
+    if is_loopback_endpoint(&parsed) {
+        return Ok(());
+    }
+
+    if !provider.advanced_endpoint {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            format!("{label} LAN or external endpoints require advanced mode."),
             false,
         ));
     }
 
     Ok(())
+}
+
+fn is_loopback_endpoint(url: &Url) -> bool {
+    matches!(
+        url.host_str()
+            .map(|host| host.to_ascii_lowercase())
+            .as_deref(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
+    )
 }
 
 fn validate_secret_input(input: &ProviderSecretInput) -> Result<(), ProviderCommandError> {
@@ -425,195 +448,6 @@ fn preview_text(raw: &str) -> Option<String> {
         preview.push(ch);
     }
     Some(preview)
-}
-
-fn validate_local_source(source: &LocalSourceInput) -> Result<PathBuf, String> {
-    if source.id.trim().is_empty() || source.name.trim().is_empty() || source.path.trim().is_empty()
-    {
-        return Err("Local source registration is incomplete.".into());
-    }
-
-    let path = PathBuf::from(source.path.trim());
-    match source.kind.trim() {
-        "file" if path.is_file() => Ok(path),
-        "directory" if path.is_dir() => Ok(path),
-        "file" => Err(format!(
-            "Registered file source was not found: {}",
-            source.path
-        )),
-        "directory" => Err(format!(
-            "Registered directory source was not found: {}",
-            source.path
-        )),
-        other => Err(format!("Unsupported local source type: {other}")),
-    }
-}
-
-fn is_supported_source_file(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some(
-            "txt"
-                | "md"
-                | "mdx"
-                | "json"
-                | "csv"
-                | "ts"
-                | "tsx"
-                | "js"
-                | "jsx"
-                | "rs"
-                | "py"
-                | "html"
-                | "css"
-                | "toml"
-                | "yaml"
-                | "yml"
-        )
-    )
-}
-
-fn truncate_to_char_limit(value: &str, limit: usize) -> String {
-    value.chars().take(limit).collect::<String>()
-}
-
-fn chunk_source_text(text: &str) -> Vec<String> {
-    let chars = text.chars().collect::<Vec<_>>();
-    if chars.is_empty() {
-        return Vec::new();
-    }
-
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        let end = usize::min(start + CHUNK_SIZE, chars.len());
-        let chunk = chars[start..end].iter().collect::<String>();
-        let trimmed = chunk.trim();
-        if !trimmed.is_empty() {
-            chunks.push(trimmed.to_string());
-        }
-        if end == chars.len() {
-            break;
-        }
-        start = end.saturating_sub(CHUNK_OVERLAP);
-    }
-
-    chunks
-}
-
-fn read_source_file(
-    path: &Path,
-    source: &LocalSourceInput,
-) -> Result<Option<SourceDocument>, String> {
-    if !is_supported_source_file(path) {
-        return Ok(None);
-    }
-
-    let bytes = fs::read(path).map_err(|error| {
-        format!(
-            "Failed to read local source file {}: {error}",
-            path.display()
-        )
-    })?;
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-
-    let truncated = &bytes[..usize::min(bytes.len(), MAX_FILE_BYTES)];
-    let mut text = String::from_utf8_lossy(truncated).replace("\r\n", "\n");
-    if let Some(notes) = source
-        .notes
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        text = format!("Source notes: {notes}\n\n{text}");
-    }
-
-    let text = text.trim();
-    if text.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(SourceDocument {
-        source_id: source.id.clone(),
-        source_name: source.name.clone(),
-        path: path.display().to_string(),
-        text: text.to_string(),
-    }))
-}
-
-fn collect_directory_documents(
-    path: &Path,
-    source: &LocalSourceInput,
-    documents: &mut Vec<SourceDocument>,
-) -> Result<(), String> {
-    if documents.len() >= MAX_INDEXED_DOCUMENTS {
-        return Ok(());
-    }
-
-    let entries = fs::read_dir(path).map_err(|error| {
-        format!(
-            "Failed to read local source directory {}: {error}",
-            path.display()
-        )
-    })?;
-
-    for entry in entries {
-        if documents.len() >= MAX_INDEXED_DOCUMENTS {
-            break;
-        }
-
-        let entry = entry.map_err(|error| {
-            format!(
-                "Failed to inspect directory entry in {}: {error}",
-                path.display()
-            )
-        })?;
-        let entry_path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            format!(
-                "Failed to inspect file type for {}: {error}",
-                entry_path.display()
-            )
-        })?;
-
-        if file_type.is_dir() {
-            collect_directory_documents(&entry_path, source, documents)?;
-        } else if file_type.is_file() {
-            if let Some(document) = read_source_file(&entry_path, source)? {
-                documents.push(document);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn build_documents_for_sources(
-    sources: &[LocalSourceInput],
-) -> Result<Vec<SourceDocument>, String> {
-    let mut documents = Vec::new();
-
-    for source in sources {
-        let path = validate_local_source(source)?;
-        if path.is_file() {
-            if let Some(document) = read_source_file(&path, source)? {
-                documents.push(document);
-            }
-        } else if path.is_dir() {
-            collect_directory_documents(&path, source, &mut documents)?;
-        }
-
-        if documents.len() >= MAX_INDEXED_DOCUMENTS {
-            break;
-        }
-    }
-
-    Ok(documents)
 }
 
 fn build_openai_responses_payload(provider: &ProviderConfig, prompt: &str) -> Value {
@@ -1053,55 +887,6 @@ fn hide_palette_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn build_source_index(sources: Vec<LocalSourceInput>) -> Result<SourceIndexBuildResult, String> {
-    if sources.is_empty() {
-        return Err("Register at least one local source before building the index.".into());
-    }
-
-    let documents = build_documents_for_sources(&sources)?;
-    if documents.is_empty() {
-        return Err(
-            "No supported text documents were found in the registered local sources.".into(),
-        );
-    }
-
-    let mut chunks = Vec::new();
-    for (document_index, document) in documents.iter().enumerate() {
-        for (index, chunk) in chunk_source_text(&document.text).into_iter().enumerate() {
-            let snippet =
-                preview_text(&chunk).unwrap_or_else(|| truncate_to_char_limit(&chunk, 240));
-            chunks.push(IndexedSourceChunk {
-                id: format!("{}-{document_index}-{index}", document.source_id),
-                source_id: document.source_id.clone(),
-                source_name: document.source_name.clone(),
-                path: document.path.clone(),
-                snippet,
-                text: chunk,
-            });
-        }
-    }
-
-    if chunks.is_empty() {
-        return Err(
-            "Registered sources were readable, but no indexable text chunks were produced.".into(),
-        );
-    }
-
-    Ok(SourceIndexBuildResult {
-        source_count: sources.len(),
-        document_count: documents.len(),
-        chunk_count: chunks.len(),
-        message: format!(
-            "Indexed {} document(s) from {} registered source(s) into {} chunk(s).",
-            documents.len(),
-            sources.len(),
-            chunks.len()
-        ),
-        chunks,
-    })
-}
-
-#[tauri::command]
 async fn store_provider_secret(
     input: ProviderSecretInput,
 ) -> ProviderCommandResult<ProviderSecretStatus> {
@@ -1126,6 +911,63 @@ async fn store_provider_secret(
         Ok(status) => ProviderCommandResult::Success { data: status },
         Err(error) => ProviderCommandResult::Error { error },
     }
+}
+
+#[tauri::command]
+async fn diagnose_provider_secret(
+    provider_id: String,
+) -> ProviderCommandResult<ProviderSecretDiagnosis> {
+    let trimmed = provider_id.trim();
+    let result = if trimmed.is_empty() {
+        Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            "Provider id is missing.",
+            false,
+        ))
+    } else {
+        match provider_secret_entry(trimmed) {
+            Ok(entry) => match entry.get_password() {
+                Ok(secret) if !secret.trim().is_empty() => Ok(ProviderSecretDiagnosis {
+                    provider_id: trimmed.into(),
+                    has_secret: true,
+                    message: "Provider secret exists in the OS credential store.".into(),
+                }),
+                Ok(_) | Err(KeyringError::NoEntry) => Ok(ProviderSecretDiagnosis {
+                    provider_id: trimmed.into(),
+                    has_secret: false,
+                    message: "Provider metadata exists, but no secret was found in the OS credential store.".into(),
+                }),
+                Err(error) => Err(ProviderCommandError::new(
+                    ProviderErrorKind::SecretStore,
+                    format!("Failed to diagnose provider secret: {error}"),
+                    false,
+                )),
+            },
+            Err(error) => Err(error),
+        }
+    };
+
+    match result {
+        Ok(status) => ProviderCommandResult::Success { data: status },
+        Err(error) => ProviderCommandResult::Error { error },
+    }
+}
+
+#[tauri::command]
+async fn start_document_workflow(
+    app: AppHandle,
+    state: State<'_, DocumentJobState>,
+    request: DocumentWorkflowRequest,
+) -> Result<DocumentWorkflowResult, String> {
+    start_document_workflow_impl(app, state, request).await
+}
+
+#[tauri::command]
+fn cancel_document_job(
+    state: State<'_, DocumentJobState>,
+    job_id: String,
+) -> Result<DocumentJobMetadata, String> {
+    cancel_document_job_impl(state, job_id)
 }
 
 #[tauri::command]
@@ -1205,6 +1047,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppShellState::default())
+        .manage(DocumentJobState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler({
@@ -1221,6 +1064,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let state = app.state::<AppShellState>();
@@ -1262,11 +1106,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            build_source_index,
+            cancel_document_job,
             delete_provider_secret,
+            diagnose_provider_secret,
             get_app_shell_state,
             handle_prompt,
             hide_palette_window,
+            start_document_workflow,
             store_provider_secret,
             test_provider
         ])
@@ -1284,8 +1130,9 @@ mod tests {
             kind: OPENAI_RESPONSES_KIND.into(),
             name: "OpenAI".into(),
             endpoint: "https://api.openai.com/v1/responses".into(),
-            model: "gpt-5.4-mini".into(),
+            model: "gpt-4.1-mini".into(),
             has_secret: true,
+            advanced_endpoint: false,
         }
     }
 
@@ -1297,6 +1144,7 @@ mod tests {
             endpoint: "http://127.0.0.1:11434/api/generate".into(),
             model: "llama3.2".into(),
             has_secret: false,
+            advanced_endpoint: false,
         }
     }
 
@@ -1308,6 +1156,7 @@ mod tests {
             endpoint: "https://api.anthropic.com/v1/messages".into(),
             model: "claude-sonnet-4-20250514".into(),
             has_secret: true,
+            advanced_endpoint: false,
         }
     }
 
@@ -1319,6 +1168,7 @@ mod tests {
             endpoint: "http://127.0.0.1:8080/v1/chat/completions".into(),
             model: "local-llama".into(),
             has_secret: false,
+            advanced_endpoint: false,
         }
     }
 
@@ -1348,8 +1198,38 @@ mod tests {
     }
 
     #[test]
+    fn validate_provider_rejects_custom_hosted_endpoint_without_advanced_mode() {
+        let mut provider = sample_provider();
+        provider.endpoint = "https://proxy.example.com/v1/responses".into();
+
+        let error = validate_provider(&provider).expect_err("custom hosted endpoint should fail");
+        assert!(matches!(error.kind, ProviderErrorKind::Validation));
+        assert!(error.message.contains("advanced mode"));
+    }
+
+    #[test]
+    fn validate_provider_accepts_custom_hosted_endpoint_with_advanced_mode() {
+        let mut provider = sample_provider();
+        provider.endpoint = "https://proxy.example.com/v1/responses".into();
+        provider.advanced_endpoint = true;
+
+        assert!(validate_provider(&provider).is_ok());
+    }
+
+    #[test]
     fn validate_provider_accepts_ollama_without_secret() {
         assert!(validate_provider(&sample_ollama_provider()).is_ok());
+    }
+
+    #[test]
+    fn validate_provider_rejects_external_local_endpoint_without_advanced_mode() {
+        let mut provider = sample_ollama_provider();
+        provider.endpoint = "http://192.168.1.20:11434/api/generate".into();
+
+        let error =
+            validate_provider(&provider).expect_err("LAN endpoint should require advanced mode");
+        assert!(matches!(error.kind, ProviderErrorKind::Validation));
+        assert!(error.message.contains("advanced mode"));
     }
 
     #[test]
@@ -1377,7 +1257,7 @@ mod tests {
         let provider = sample_provider();
         let payload = build_openai_responses_payload(&provider, "hello");
 
-        assert_eq!(payload["model"], "gpt-5.4-mini");
+        assert_eq!(payload["model"], "gpt-4.1-mini");
         assert_eq!(payload["input"], "hello");
     }
 
@@ -1489,49 +1369,5 @@ mod tests {
             parse_llama_cpp_chat_output(raw, parsed).expect("generated text should be extracted");
 
         assert_eq!(text, "local answer");
-    }
-
-    #[test]
-    fn chunk_source_text_splits_large_documents() {
-        let text = "alpha ".repeat(600);
-        let chunks = chunk_source_text(&text);
-
-        assert!(chunks.len() > 1);
-        assert!(chunks.iter().all(|chunk| !chunk.trim().is_empty()));
-    }
-
-    #[test]
-    fn build_source_index_reads_a_registered_file() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "pilotbell-index-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("current time")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
-        let file_path = temp_dir.join("notes.md");
-        fs::write(
-            &file_path,
-            "# Notes\nPilotBell local knowledge should index this file.\n",
-        )
-        .expect("test file should be written");
-
-        let result = build_source_index(vec![LocalSourceInput {
-            id: "source-1".into(),
-            kind: "file".into(),
-            name: "Notes".into(),
-            path: file_path.display().to_string(),
-            notes: Some("Important reference".into()),
-        }])
-        .expect("index should build");
-
-        assert_eq!(result.source_count, 1);
-        assert_eq!(result.document_count, 1);
-        assert!(!result.chunks.is_empty());
-        assert!(result.chunks[0].text.contains("Important reference"));
-
-        let _ = fs::remove_file(&file_path);
-        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
