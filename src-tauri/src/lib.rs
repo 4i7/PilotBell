@@ -1,4 +1,5 @@
 mod document;
+mod shell;
 
 use document::workflow::{
     cancel_document_job as cancel_document_job_impl,
@@ -10,12 +11,14 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use shell::{
+    get_app_shell_state, hide_palette_window, open_settings_window, toggle_main_window,
+    update_shell_state, AppShellState, FALLBACK_SHORTCUT_LABEL, PRIMARY_SHORTCUT_LABEL,
+};
 use std::borrow::Cow;
-use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const PROVIDER_SECRET_SERVICE: &str = "io.github.fouri7.pilotbell.provider";
 const OPENAI_RESPONSES_KIND: &str = "openai-responses";
@@ -25,11 +28,6 @@ const LLAMA_CPP_KIND: &str = "llama-cpp";
 const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
 const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION_HEADER: &str = "2023-06-01";
-const PRIMARY_SHORTCUT_LABEL: &str = "Alt+Space";
-const FALLBACK_SHORTCUT_LABEL: &str = "Ctrl+Shift+Space";
-const FOCUS_PROMPT_EVENT: &str = "pilotbell://focus-prompt";
-const SETTINGS_SECTION_EVENT: &str = "pilotbell://settings-section";
-
 #[derive(Serialize)]
 struct AssistantReply {
     content: String,
@@ -104,18 +102,6 @@ struct ProviderAdapter {
     build_payload: fn(&ProviderConfig, &str) -> Value,
     prepare_request: fn(reqwest::RequestBuilder, Option<&str>) -> reqwest::RequestBuilder,
     parse_response: fn(&str, Value) -> Result<String, ProviderCommandError>,
-}
-
-#[derive(Default)]
-struct AppShellState(Mutex<AppShellStateSnapshot>);
-
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AppShellStateSnapshot {
-    active_shortcut: String,
-    used_fallback_shortcut: bool,
-    global_shortcut_registered: bool,
-    message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -820,108 +806,6 @@ async fn call_provider(
         provider: provider.name,
         model: provider.model,
     })
-}
-
-fn update_shell_state(
-    state: &State<'_, AppShellState>,
-    updater: impl FnOnce(&mut AppShellStateSnapshot),
-) {
-    if let Ok(mut current) = state.0.lock() {
-        updater(&mut current);
-    }
-}
-
-fn toggle_main_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Main window is unavailable.".to_string())?;
-    let visible = window.is_visible().map_err(|error| error.to_string())?;
-
-    if visible {
-        hide_main_window_impl(app, &window)?;
-    } else {
-        show_main_window_impl(app, &window)?;
-    }
-
-    Ok(())
-}
-
-fn hide_main_window_impl<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    window: &WebviewWindow<R>,
-) -> Result<(), String> {
-    let _ = app.save_window_state(StateFlags::all());
-    window
-        .set_always_on_top(false)
-        .map_err(|error| error.to_string())?;
-    window.hide().map_err(|error| error.to_string())
-}
-
-fn show_main_window_impl<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    window: &WebviewWindow<R>,
-) -> Result<(), String> {
-    window.show().map_err(|error| error.to_string())?;
-    window
-        .set_always_on_top(true)
-        .map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
-    app.emit_to("main", FOCUS_PROMPT_EVENT, ())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn get_app_shell_state(state: State<'_, AppShellState>) -> AppShellStateSnapshot {
-    state
-        .0
-        .lock()
-        .map(|snapshot| snapshot.clone())
-        .unwrap_or_default()
-}
-
-#[tauri::command]
-fn hide_palette_window(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Main window is unavailable.".to_string())?;
-    hide_main_window_impl(&app, &window)
-}
-
-fn normalize_settings_section(section: Option<String>) -> String {
-    match section.as_deref() {
-        Some("documents") => "documents".into(),
-        Some("sources") => "sources".into(),
-        _ => "providers".into(),
-    }
-}
-
-#[tauri::command]
-fn open_settings_window(app: AppHandle, section: Option<String>) -> Result<(), String> {
-    let section = normalize_settings_section(section);
-
-    if let Some(window) = app.get_webview_window("settings") {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        app.emit_to("settings", SETTINGS_SECTION_EVENT, &section)
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-
-    WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        WebviewUrl::App(format!("index.html?view=settings&section={section}").into()),
-    )
-    .title("PilotBell Settings")
-    .inner_size(760.0, 820.0)
-    .min_inner_size(420.0, 520.0)
-    .center()
-    .decorations(false)
-    .resizable(true)
-    .focused(true)
-    .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
