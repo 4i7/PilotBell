@@ -1,0 +1,219 @@
+.shell {
+  min-height: 100vh;
+  padding: 0;
+}
+
+.window-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-shell);
+  backdrop-filter: blur(28px);
+  box-shadow: none;
+}
+
+.app-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-shell-strong) 90%, transparent) 0%, transparent 100%);
+  border-bottom: 1px solid var(--border-soft);
+  user-select: none;
+}
+
+.app-chrome__brand,
+.app-chrome__copy,
+.app-chrome__actions,
+.chrome-actions,
+.window-controls {
+  display: flex;
+  align-items: center;
+}
+
+.app-chrome__brand,
+.app-chrome__copy {
+  min-width: 0;
+}
+
+.app-chrome__brand {
+  gap: 0;
+  flex: 0 0 auto;
+}
+
+.app-chrome__copy {
+  display: none;
+}
+
+.app-chrome__copy h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.app-chrome__copy p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-chrome__actions {
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.app-chrome__drag-spacer {
+  align-self: stretch;
+  flex: 1;
+  min-width: 8px;
+}
+
+.chrome-actions,
+.window-controls {
+  gap: 6px;
+}
+
+.window-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-shell-strong) 90%, transparent) 0%, transparent 100%);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.window-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.window-title-copy {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.window-title-copy h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.window-title-copy p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.window-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.window-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.window-icon-button {
+  min-width: 0;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  border-radius: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+  cursor: pointer;
+}
+
+.window-icon-button:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.window-icon-button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  overflow: visible;
+}
+
+.chrome-action-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.window-icon-button.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-subtle) 92%, transparent);
+}
+
+.theme-option {
+  min-width: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.theme-option:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  transform: none;
+}
+
+.theme-option.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.theme-option svg {
+  width: 15px;
+  height: 15px;
+}

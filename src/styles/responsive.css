@@ -1,0 +1,160 @@
+@media (max-width: 980px) {
+  .shell {
+    padding: 0;
+  }
+
+  .window-shell {
+    min-height: 100vh;
+    border-radius: 0;
+  }
+
+  .workspace {
+    padding: 14px;
+  }
+
+  .settings-overlay {
+    padding: 10px;
+  }
+
+  .settings-panel {
+    width: 100%;
+    border-radius: 22px;
+  }
+}
+
+.settings-window-page .settings-panel {
+  width: 100%;
+  min-height: 100vh;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-window-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  margin: calc(var(--settings-panel-padding-y) * -1) calc(var(--settings-panel-padding-x) * -1) 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-shell-strong) 90%, transparent) 0%, transparent 100%);
+  user-select: none;
+}
+
+.settings-window-title {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+.settings-window-chrome .window-controls {
+  flex: none;
+}
+
+@media (max-width: 719px) {
+  .composer-footer,
+  .provider-list li,
+  .source-item,
+  .settings-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .composer-side {
+    flex: 0 0 auto;
+  }
+
+  .provider-menu {
+    left: 0;
+    right: auto;
+    width: min(100%, 340px);
+  }
+
+  .chat-bubble {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 519px) {
+  .shell {
+    padding: 0;
+  }
+
+  .window-shell {
+    min-height: 100vh;
+    border-radius: 0;
+  }
+
+  .app-chrome,
+  .workspace,
+  .composer-dock,
+  .settings-panel {
+    --settings-panel-padding-x: 12px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .app-chrome {
+    align-items: flex-start;
+  }
+
+  .app-chrome__copy p {
+    display: none;
+  }
+
+  .chrome-actions {
+    display: none;
+  }
+
+  .composer-row,
+  .provider-list li,
+  .source-item,
+  .settings-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .attach-button,
+  .provider-switcher-button,
+  .send-button {
+    width: 100%;
+  }
+
+  .composer-side {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .send-button {
+    justify-content: center;
+  }
+
+  .settings-overlay {
+    padding: 8px;
+  }
+
+  .settings-panel {
+    --settings-panel-padding-y: 16px;
+    border-radius: 20px;
+    padding-top: 16px;
+    padding-bottom: 16px;
+  }
+
+  .settings-tabs {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .settings-tab {
+    flex: 1;
+    text-align: center;
+  }
+
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

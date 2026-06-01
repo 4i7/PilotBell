@@ -1,0 +1,156 @@
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.chat-surface {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-surface.empty-session {
+  gap: 0;
+}
+
+.chat-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 12px 4px;
+}
+
+.chat-empty-hint {
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-empty-copy {
+  max-width: 720px;
+  text-align: center;
+}
+
+.chat-empty-copy h2 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3vw, 2.3rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+}
+
+.chat-empty-copy p:last-child {
+  margin: 12px auto 0;
+  max-width: 640px;
+  color: var(--text-secondary);
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chat-thread {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 8px 2px 0;
+}
+
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-user {
+  justify-content: flex-end;
+}
+
+.bubble-assistant {
+  justify-content: flex-start;
+}
+
+.chat-bubble {
+  max-width: min(82%, 760px);
+  padding: 16px 18px;
+  border-radius: 22px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  box-shadow: 0 12px 30px rgba(15, 18, 28, 0.08);
+}
+
+.chat-bubble p,
+.chat-bubble pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.user-bubble {
+  border-color: transparent;
+  background: var(--user-bubble);
+  color: var(--text-on-accent);
+}
+
+.assistant-bubble {
+  background: color-mix(in srgb, var(--bg-shell-strong) 94%, transparent);
+}
+
+.error-bubble {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  background: color-mix(in srgb, var(--danger-soft) 72%, var(--bg-elevated));
+}
+
+.bubble-meta {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.user-meta {
+  text-align: right;
+}
+
+.bubble-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ghost-action {
+  min-width: 0;
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.ghost-action:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+}
+
+.ghost-action:disabled,
+button:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
