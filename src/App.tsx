@@ -780,7 +780,7 @@ function App() {
   }
 
   async function startWindowDrag() {
-    if (!isTauriRuntime || isSettingsWindow) {
+    if (!isTauriRuntime) {
       return;
     }
 
