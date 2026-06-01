@@ -23,14 +23,6 @@ import {
   providerIsCloud,
   providerRequiresApiKey,
 } from "./domain/provider";
-import {
-  DIRECTORY_SOURCE_KIND,
-  type LocalSource,
-  type LocalSourceDraft,
-  isLocalSourceDraftValid,
-  makeLocalSourceId,
-  normalizeLocalSourceDraft,
-} from "./domain/source";
 import type { AttachedPromptFile } from "./domain/prompt";
 import type { PromptInputPreferences } from "./domain/inputPreferences";
 import { DEFAULT_PROMPT_INPUT_PREFERENCES } from "./domain/inputPreferences";
@@ -56,6 +48,7 @@ import {
   SunIcon,
 } from "./components/icons";
 import { useDocumentJobs } from "./hooks/useDocumentJobs";
+import { useLocalSources } from "./hooks/useLocalSources";
 import {
   loadPromptInputPreferences,
   savePromptInputPreferences,
@@ -67,7 +60,6 @@ import {
   savePromptSession,
 } from "./lib/sessionStore";
 import { formatBytes, formatRelativeTime, formatSessionTime } from "./lib/formatters";
-import { loadLocalSources, saveLocalSources } from "./lib/sourceStore";
 import { buildPromptWithAttachments, readAttachedPromptFile } from "./lib/promptAttachments";
 import {
   type ProviderHealthRecord,
@@ -195,13 +187,6 @@ const LLAMA_CPP_PROVIDER_DRAFT: ProviderDraft = {
   advancedEndpoint: false,
 };
 
-const DEFAULT_LOCAL_SOURCE_DRAFT: LocalSourceDraft = {
-  kind: DIRECTORY_SOURCE_KIND,
-  name: "",
-  path: "",
-  notes: "",
-};
-
 const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
 const SETTINGS_SECTION_EVENT = "pilotbell://settings-section";
 const GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY = "pilotbell.hideGlobalShortcutNotice";
@@ -312,7 +297,6 @@ function App() {
   );
   const [removingProviderId, setRemovingProviderId] = useState("");
   const [providerStatus, setProviderStatus] = useState<InlineStatus | null>(null);
-  const [sourceStatus, setSourceStatus] = useState<InlineStatus | null>(null);
   const [chatStatus, setChatStatus] = useState<InlineStatus | null>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
     loadThemePreference(),
@@ -337,12 +321,6 @@ function App() {
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({ ...DEFAULT_PROVIDER_DRAFT });
-  const [localSources, setLocalSources] = useState<LocalSource[]>(() => loadLocalSources());
-  const [editingSourceId, setEditingSourceId] = useState("");
-  const [removingSourceId, setRemovingSourceId] = useState("");
-  const [sourceDraft, setSourceDraft] = useState<LocalSourceDraft>({
-    ...DEFAULT_LOCAL_SOURCE_DRAFT,
-  });
 
   const selectedProvider = useMemo(
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
@@ -351,10 +329,6 @@ function App() {
   const editingProvider = useMemo(
     () => providers.find((provider) => provider.id === editingProviderId) ?? null,
     [providers, editingProviderId],
-  );
-  const editingSource = useMemo(
-    () => localSources.find((source) => source.id === editingSourceId) ?? null,
-    [localSources, editingSourceId],
   );
   const selectedProviderHealth = selectedProvider
     ? providerHealthRecords[selectedProvider.id] ?? null
@@ -383,17 +357,25 @@ function App() {
   const shouldShowSettings = settingsOpen;
   const isProviderActionsDisabled =
     isMigratingProviders || isSavingProvider || removingProviderId.length > 0;
-  const isSourceActionsDisabled = removingSourceId.length > 0;
   const providerEndpointRisk = classifyProviderEndpoint(providerDraft.kind, providerDraft.endpoint);
+  const {
+    localSources,
+    sourceDraft,
+    setSourceDraft,
+    editingSource,
+    sourceStatus,
+    setSourceStatus,
+    isSourceActionsDisabled,
+    removingSourceId,
+    saveSource,
+    cancelSourceEdit,
+    beginEditSource,
+    removeSource,
+  } = useLocalSources(() => openSettings("sources"));
 
   function persistProviders(next: ProviderConfig[]) {
     setProviders(next);
     saveProviders(next);
-  }
-
-  function persistLocalSources(next: LocalSource[]) {
-    setLocalSources(next);
-    saveLocalSources(next);
   }
 
   function persistSessionEntries(next: PromptSessionEntry[]) {
@@ -1246,85 +1228,6 @@ function App() {
       tone: "warning",
       message: "Stored secret deleted. Re-save the API key before testing this provider.",
     });
-  }
-
-  function resetSourceDraft() {
-    setEditingSourceId("");
-    setSourceDraft({ ...DEFAULT_LOCAL_SOURCE_DRAFT });
-  }
-
-  function beginEditSource(source: LocalSource) {
-    setEditingSourceId(source.id);
-    setSourceDraft({
-      kind: source.kind,
-      name: source.name,
-      path: source.path,
-      notes: source.notes ?? "",
-    });
-    setSourceStatus({
-      tone: "neutral",
-      message: `Editing ${source.name}. Update the path metadata and save when ready.`,
-    });
-    openSettings("sources");
-  }
-
-  function cancelSourceEdit() {
-    resetSourceDraft();
-    setSourceStatus({
-      tone: "neutral",
-      message: "Source editing cancelled.",
-    });
-  }
-
-  function saveSource() {
-    const normalized = normalizeLocalSourceDraft(sourceDraft);
-    if (!isLocalSourceDraftValid(normalized)) {
-      setSourceStatus({
-        tone: "warning",
-        message: "Source registration failed: name and path are required.",
-      });
-      return;
-    }
-
-    const nextSource: LocalSource = {
-      id: editingSource?.id ?? makeLocalSourceId(),
-      kind: normalized.kind,
-      name: normalized.name,
-      path: normalized.path,
-      notes: normalized.notes || undefined,
-    };
-
-    if (editingSource) {
-      persistLocalSources(
-        localSources.map((source) => (source.id === nextSource.id ? nextSource : source)),
-      );
-      setSourceStatus({
-        tone: "success",
-        message: `Updated ${nextSource.name}. Source registration is deprecated for new document workflows.`,
-      });
-    } else {
-      persistLocalSources([nextSource, ...localSources]);
-      setSourceStatus({
-        tone: "success",
-        message: `Registered ${nextSource.name}. New document workflows use selected files instead of a persistent index.`,
-      });
-    }
-
-    resetSourceDraft();
-  }
-
-  function removeSource(id: string) {
-    setRemovingSourceId(id);
-    const next = localSources.filter((source) => source.id !== id);
-    persistLocalSources(next);
-    if (editingSourceId === id) {
-      resetSourceDraft();
-    }
-    setSourceStatus({
-      tone: "neutral",
-      message: "Local source registration removed.",
-    });
-    setRemovingSourceId("");
   }
 
   async function testProvider() {
