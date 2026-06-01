@@ -66,7 +66,9 @@ import {
   loadPromptSession,
   savePromptSession,
 } from "./lib/sessionStore";
+import { formatBytes, formatRelativeTime, formatSessionTime } from "./lib/formatters";
 import { loadLocalSources, saveLocalSources } from "./lib/sourceStore";
+import { buildPromptWithAttachments, readAttachedPromptFile } from "./lib/promptAttachments";
 import {
   type ProviderHealthRecord,
   type ProviderReadiness,
@@ -205,8 +207,6 @@ const SETTINGS_SECTION_EVENT = "pilotbell://settings-section";
 const GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY = "pilotbell.hideGlobalShortcutNotice";
 const BROWSER_PREVIEW_MESSAGE =
   "Browser preview mode detected. PilotBell desktop features require `npm run tauri dev` or a packaged Tauri build.";
-const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
-const MAX_ATTACHMENT_TEXT_CHARS = 8_000;
 
 function hasTauriRuntime() {
   if (typeof window === "undefined") {
@@ -255,53 +255,6 @@ function makeSessionEntryId() {
   return `session-${crypto.randomUUID()}`;
 }
 
-function makeAttachmentId() {
-  return `attachment-${crypto.randomUUID()}`;
-}
-
-function formatSessionTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown time";
-  }
-
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatRelativeTime(value: string) {
-  const checkedAt = new Date(value).getTime();
-  if (Number.isNaN(checkedAt)) {
-    return "unknown";
-  }
-
-  const elapsedMs = Date.now() - checkedAt;
-  const elapsedMinutes = Math.max(0, Math.round(elapsedMs / 60_000));
-  if (elapsedMinutes < 1) {
-    return "just now";
-  }
-  if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
-  }
-
-  const elapsedHours = Math.round(elapsedMinutes / 60);
-  return `${elapsedHours}h ago`;
-}
-
-function formatBytes(size: number) {
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function readinessLabel(readiness: ProviderReadiness) {
   switch (readiness) {
     case "ready":
@@ -313,100 +266,6 @@ function readinessLabel(readiness: ProviderReadiness) {
     case "unknown":
       return "Untested";
   }
-}
-
-function buildPromptWithAttachments(prompt: string, files: AttachedPromptFile[]) {
-  if (files.length === 0) {
-    return {
-      preparedPrompt: prompt,
-      attachmentCount: 0,
-    };
-  }
-
-  const attachmentBlock = files
-    .map((file, index) => {
-      const metadata = `${file.name} (${formatBytes(file.size)}${file.type ? `, ${file.type}` : ""})`;
-      if (file.textContent) {
-        return `[${index + 1}] ${metadata}\n${file.textContent}`;
-      }
-
-      return `[${index + 1}] ${metadata}\n${file.note ?? "Attachment added without extracted text content."}`;
-    })
-    .join("\n\n");
-
-  return {
-    preparedPrompt: `Use the following attached file context when it is relevant.\n\n${attachmentBlock}\n\nUser prompt:\n${prompt}`,
-    attachmentCount: files.length,
-  };
-}
-
-function extensionForFileName(name: string) {
-  const parts = name.toLowerCase().split(".");
-  return parts.length > 1 ? parts[parts.length - 1] ?? "" : "";
-}
-
-function isTextAttachment(file: File) {
-  const extension = extensionForFileName(file.name);
-  return (
-    file.type.startsWith("text/") ||
-    [
-      "md",
-      "txt",
-      "json",
-      "csv",
-      "ts",
-      "tsx",
-      "js",
-      "jsx",
-      "py",
-      "rs",
-      "html",
-      "css",
-      "toml",
-      "yaml",
-      "yml",
-      "xml",
-    ].includes(extension)
-  );
-}
-
-async function readAttachedPromptFile(file: File): Promise<AttachedPromptFile> {
-  const attachment: AttachedPromptFile = {
-    id: makeAttachmentId(),
-    name: file.name,
-    size: file.size,
-    type: file.type,
-  };
-
-  const extension = extensionForFileName(file.name);
-  if (extension === "pdf") {
-    attachment.note =
-      "PDF attached. Binary intake is wired, but PDF text extraction is not connected to the prompt pipeline yet.";
-    return attachment;
-  }
-
-  if (!isTextAttachment(file)) {
-    attachment.note = "Binary attachment added. Metadata is available, but text extraction is not active for this file type yet.";
-    return attachment;
-  }
-
-  if (file.size > MAX_ATTACHMENT_TEXT_BYTES) {
-    attachment.note =
-      "Text attachment added, but it is too large for inline prompt injection. Only metadata was attached.";
-    return attachment;
-  }
-
-  const rawText = (await file.text()).replace(/\r\n/g, "\n").trim();
-  if (!rawText) {
-    attachment.note = "Attachment was empty after text extraction.";
-    return attachment;
-  }
-
-  attachment.textContent = rawText.slice(0, MAX_ATTACHMENT_TEXT_CHARS);
-  if (rawText.length > MAX_ATTACHMENT_TEXT_CHARS) {
-    attachment.note = "Attachment text was truncated before prompt injection.";
-  }
-  return attachment;
 }
 
 function isSettingsSection(value: unknown): value is SettingsSection {
