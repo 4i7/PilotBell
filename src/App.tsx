@@ -59,6 +59,20 @@ import {
   loadPromptSession,
   savePromptSession,
 } from "./lib/sessionStore";
+import {
+  type ProviderCommandError,
+  deleteProviderSecret,
+  diagnoseProviderSecret,
+  sendProviderPrompt,
+  storeProviderSecret,
+  testProviderConnection,
+} from "./lib/providerCommands";
+import {
+  ANTHROPIC_PROVIDER_DRAFT,
+  DEFAULT_PROVIDER_DRAFT,
+  LLAMA_CPP_PROVIDER_DRAFT,
+  OLLAMA_PROVIDER_DRAFT,
+} from "./lib/providerDrafts";
 import { formatBytes, formatRelativeTime, formatSessionTime } from "./lib/formatters";
 import { buildPromptWithAttachments, readAttachedPromptFile } from "./lib/promptAttachments";
 import {
@@ -75,54 +89,6 @@ import {
   saveThemePreference,
 } from "./lib/themeStore";
 import "./App.css";
-
-type AssistantReply = {
-  content: string;
-  provider: string;
-  model: string;
-};
-
-type ProviderErrorKind =
-  | "validation"
-  | "secret_store"
-  | "timeout"
-  | "network"
-  | "provider"
-  | "response_format"
-  | "internal";
-
-type ProviderCommandError = {
-  kind: ProviderErrorKind;
-  message: string;
-  statusCode?: number | null;
-  retryable: boolean;
-  details?: string | null;
-};
-
-type ProviderHealth = {
-  message: string;
-};
-
-type ProviderSecretStatus = {
-  providerId: string;
-  message: string;
-};
-
-type ProviderSecretDiagnosis = {
-  providerId: string;
-  hasSecret: boolean;
-  message: string;
-};
-
-type CommandResult<T> =
-  | {
-      status: "success";
-      data: T;
-    }
-  | {
-      status: "error";
-      error: ProviderCommandError;
-    };
 
 type StatusTone = "neutral" | "success" | "warning" | "error";
 
@@ -150,42 +116,6 @@ const THEME_OPTIONS: Array<{
   { value: "dark", label: "Dark", icon: MoonIcon },
   { value: "system", label: "System", icon: MonitorIcon },
 ];
-
-const DEFAULT_PROVIDER_DRAFT: ProviderDraft = {
-  kind: DEFAULT_PROVIDER_KIND,
-  name: "OpenAI",
-  endpoint: "https://api.openai.com/v1/responses",
-  apiKey: "",
-  model: "",
-  advancedEndpoint: false,
-};
-
-const OLLAMA_PROVIDER_DRAFT: ProviderDraft = {
-  kind: OLLAMA_PROVIDER_KIND,
-  name: "Ollama",
-  endpoint: "http://127.0.0.1:11434/api/generate",
-  apiKey: "",
-  model: "llama3.2",
-  advancedEndpoint: false,
-};
-
-const ANTHROPIC_PROVIDER_DRAFT: ProviderDraft = {
-  kind: ANTHROPIC_PROVIDER_KIND,
-  name: "Anthropic",
-  endpoint: "https://api.anthropic.com/v1/messages",
-  apiKey: "",
-  model: "claude-sonnet-4-20250514",
-  advancedEndpoint: false,
-};
-
-const LLAMA_CPP_PROVIDER_DRAFT: ProviderDraft = {
-  kind: LLAMA_CPP_PROVIDER_KIND,
-  name: "llama.cpp",
-  endpoint: "http://127.0.0.1:8080/v1/chat/completions",
-  apiKey: "",
-  model: "local-llama",
-  advancedEndpoint: false,
-};
 
 const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
 const SETTINGS_SECTION_EVENT = "pilotbell://settings-section";
@@ -448,27 +378,6 @@ function App() {
 
   function closeSettings() {
     setSettingsOpen(false);
-  }
-
-  async function storeProviderSecret(providerId: string, apiKey: string) {
-    return invoke<CommandResult<ProviderSecretStatus>>("store_provider_secret", {
-      input: {
-        providerId,
-        apiKey,
-      },
-    });
-  }
-
-  async function deleteProviderSecret(providerId: string) {
-    return invoke<CommandResult<ProviderSecretStatus>>("delete_provider_secret", {
-      providerId,
-    });
-  }
-
-  async function diagnoseProviderSecret(providerId: string) {
-    return invoke<CommandResult<ProviderSecretDiagnosis>>("diagnose_provider_secret", {
-      providerId,
-    });
   }
 
   async function hidePaletteWindow() {
@@ -1255,9 +1164,7 @@ function App() {
 
     try {
       const startedAt = performance.now();
-      const result = await invoke<CommandResult<ProviderHealth>>("test_provider", {
-        provider: selectedProvider,
-      });
+      const result = await testProviderConnection(selectedProvider);
       const latencyMs = Math.round(performance.now() - startedAt);
       const checkedAt = new Date().toISOString();
 
@@ -1407,10 +1314,7 @@ function App() {
 
     try {
       const withAttachments = buildPromptWithAttachments(targetPrompt, attachedFiles);
-      const result = await invoke<CommandResult<AssistantReply>>("handle_prompt", {
-        prompt: withAttachments.preparedPrompt,
-        provider: targetProvider,
-      });
+      const result = await sendProviderPrompt(withAttachments.preparedPrompt, targetProvider);
       if (result.status === "success") {
         addSessionEntry({
           id: makeSessionEntryId(),
