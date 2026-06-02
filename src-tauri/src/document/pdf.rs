@@ -16,10 +16,22 @@ pub fn analyze_pdf(path: &Path, limits: &DocumentLimits) -> Result<DocumentAnaly
     }
 
     let sample_pages = pages.keys().copied().take(5).collect::<Vec<_>>();
+    let mut warnings = Vec::new();
     let extracted_text = if sample_pages.is_empty() {
+        warnings.push(
+            "No extractable text was found because the sampled PDF page set was empty.".into(),
+        );
         String::new()
     } else {
-        document.extract_text(&sample_pages).unwrap_or_default()
+        match document.extract_text(&sample_pages) {
+            Ok(text) => text,
+            Err(error) => {
+                warnings.push(format!(
+                    "Best-effort text extraction failed after PDF parsing; preview text is unavailable. {error}"
+                ));
+                String::new()
+            }
+        }
     };
     let preview = extracted_text
         .lines()
@@ -29,10 +41,9 @@ pub fn analyze_pdf(path: &Path, limits: &DocumentLimits) -> Result<DocumentAnaly
         .map(|line| vec![line.chars().take(120).collect::<String>()])
         .collect::<Vec<_>>();
 
-    let mut warnings = Vec::new();
     if extracted_text.trim().is_empty() {
         warnings.push(
-            "Best-effort text extraction produced no preview text; the PDF may be scanned, encrypted, or structurally unusual."
+            "No extractable text was found in the sampled PDF pages; the document may be scanned, encrypted, image-only, or structurally unusual."
                 .into(),
         );
     }
@@ -58,7 +69,7 @@ pub fn analyze_pdf(path: &Path, limits: &DocumentLimits) -> Result<DocumentAnaly
         ],
         validations: vec![
             "Parsed PDF structure without evaluating actions or embedded JavaScript.".into(),
-            "Used bounded best-effort text extraction for preview only.".into(),
+            "Used bounded best-effort text extraction from sampled pages for preview only.".into(),
         ],
         preview,
         warnings,

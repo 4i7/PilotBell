@@ -57,6 +57,7 @@
 
 @media (max-width: 719px) {
   .composer-footer,
+  .context-preview-grid,
   .provider-list li,
   .source-item,
   .settings-header {

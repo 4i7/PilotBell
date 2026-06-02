@@ -17,8 +17,15 @@ pub fn analyze_excel(path: &Path, limits: &DocumentLimits) -> Result<DocumentAna
     }
 
     let mut facts = vec![("Sheets".into(), sheet_names.len().to_string())];
-    let mut validations = vec!["Workbook formulas were not evaluated by PilotBell.".into()];
-    let mut warnings = Vec::new();
+    let mut validations = vec![
+        "Workbook formulas were not recalculated by PilotBell.".into(),
+        "Preview rows reflect workbook-readable cached or display values only where available."
+            .into(),
+    ];
+    let mut warnings = vec![
+        "Excel formulas were not recalculated. Preview rows reflect workbook-readable cached or display values only where available."
+            .into(),
+    ];
     let mut preview = Vec::new();
 
     for sheet_name in sheet_names.iter().take(5) {

@@ -5,6 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 import {
   DEFAULT_DOCUMENT_TEMPLATE,
   DOCUMENT_JOB_PROGRESS_EVENT,
+  classifyDocumentFailure,
+  documentFailureGuidance,
   type DocumentJobDraft,
   type DocumentJobMetadata,
   type DocumentJobProgress,
@@ -97,14 +99,20 @@ export function useDocumentJobs(isTauriRuntime: boolean) {
           overwrite: draft.overwrite,
         },
       });
-      persistJobs([result.metadata, ...jobs]);
+      const completedJob: DocumentJobMetadata = {
+        ...result.metadata,
+        warnings: result.warnings,
+        failureKind: null,
+      };
+      persistJobs([completedJob, ...jobs]);
       setStatusMessage(
         result.warnings.length > 0
-          ? `${result.metadata.fileName} completed with ${result.warnings.length} warning(s).`
+          ? `${result.metadata.fileName} completed with warnings: ${result.warnings.join(" ")}`
           : `${result.metadata.fileName} completed.`,
       );
     } catch (error) {
       const errorSummary = error instanceof Error ? error.message : String(error);
+      const failureKind = classifyDocumentFailure(errorSummary);
       const failedJob: DocumentJobMetadata = {
         jobId,
         fileName: fileNameFromPath(draft.inputPath),
@@ -115,9 +123,11 @@ export function useDocumentJobs(isTauriRuntime: boolean) {
         selectedTemplate: draft.selectedTemplate.trim(),
         providerId: draft.providerId.trim() || null,
         errorSummary,
+        warnings: [],
+        failureKind,
       };
       persistJobs([failedJob, ...jobs]);
-      setStatusMessage(errorSummary);
+      setStatusMessage(`${errorSummary} ${documentFailureGuidance(failureKind)}`);
     } finally {
       setIsRunning(false);
     }
