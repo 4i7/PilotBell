@@ -5,10 +5,14 @@ import {
   useState,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PromptInputPreferences } from "./domain/inputPreferences";
 import { DEFAULT_PROMPT_INPUT_PREFERENCES } from "./domain/inputPreferences";
+import {
+  getInitialSettingsSection,
+  hasTauriRuntime,
+  isSettingsWindowView,
+  type SettingsSection,
+} from "./domain/settings";
 import { AppChrome } from "./components/AppChrome";
 import { DocumentWorkflowPanel } from "./components/DocumentWorkflowPanel";
 import { ProviderSettingsSection } from "./components/ProviderSettingsSection";
@@ -35,6 +39,7 @@ import { useLocalSources } from "./hooks/useLocalSources";
 import { usePromptAttachments } from "./hooks/usePromptAttachments";
 import { usePromptSending } from "./hooks/usePromptSending";
 import { useProviderManagement } from "./hooks/useProviderManagement";
+import { useTauriWindowShell } from "./hooks/useTauriWindowShell";
 import { useThemePreference } from "./hooks/useThemePreference";
 import {
   loadPromptInputPreferences,
@@ -59,15 +64,6 @@ type InlineStatus = {
   dismissKey?: "global-shortcut";
 };
 
-type AppShellState = {
-  activeShortcut: string;
-  usedFallbackShortcut: boolean;
-  globalShortcutRegistered: boolean;
-  message?: string | null;
-};
-
-type SettingsSection = "providers" | "documents" | "sources";
-
 const THEME_OPTIONS: Array<{
   value: ThemePreference;
   label: string;
@@ -78,22 +74,8 @@ const THEME_OPTIONS: Array<{
   { value: "system", label: "System", icon: MonitorIcon },
 ];
 
-const FOCUS_PROMPT_EVENT = "pilotbell://focus-prompt";
-const SETTINGS_SECTION_EVENT = "pilotbell://settings-section";
-const GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY = "pilotbell.hideGlobalShortcutNotice";
 const BROWSER_PREVIEW_MESSAGE =
   "Browser preview mode detected. PilotBell desktop features require `npm run tauri dev` or a packaged Tauri build.";
-
-function hasTauriRuntime() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return (
-    typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-    "undefined"
-  );
-}
 
 function toneForProviderError(error: ProviderCommandError): StatusTone {
   if (
@@ -120,34 +102,8 @@ function readinessLabel(readiness: ProviderReadiness) {
   }
 }
 
-function isSettingsSection(value: unknown): value is SettingsSection {
-  return value === "providers" || value === "documents" || value === "sources";
-}
-
-function getInitialSettingsSection(): SettingsSection {
-  if (typeof window === "undefined") {
-    return "providers";
-  }
-
-  const section = new URLSearchParams(window.location.search).get("section");
-  return isSettingsSection(section) ? section : "providers";
-}
-
-function isSettingsWindowView() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return new URLSearchParams(window.location.search).get("view") === "settings";
-}
-
-function loadGlobalShortcutNoticeHidden() {
-  return localStorage.getItem(GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY) === "true";
-}
-
 function App() {
   const [prompt, setPrompt] = useState("");
-  const [shellState, setShellState] = useState<AppShellState | null>(null);
   const [sessionEntries, setSessionEntries] = useState<PromptSessionEntry[]>(() =>
     loadPromptSession(),
   );
@@ -155,10 +111,6 @@ function App() {
   const [inputPreferences, setInputPreferences] = useState<PromptInputPreferences>(() =>
     loadPromptInputPreferences(),
   );
-  const [isGlobalShortcutNoticeHidden, setIsGlobalShortcutNoticeHidden] = useState(() =>
-    loadGlobalShortcutNoticeHidden(),
-  );
-  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>(getInitialSettingsSection);
@@ -272,6 +224,26 @@ function App() {
     beginEditSource,
     removeSource,
   } = useLocalSources(() => openSettings("sources"));
+  const {
+    isWindowMaximized,
+    closeWindow,
+    dismissGlobalShortcutNotice,
+    minimizeWindow,
+    startWindowDrag,
+    toggleMaximizeWindow,
+  } = useTauriWindowShell({
+    browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
+    closeSettings,
+    isSettingsOpen: settingsOpen,
+    isSettingsWindow,
+    isTauriRuntime,
+    promptRef,
+    providerMenuOpen,
+    setChatStatus,
+    setProviderMenuOpen,
+    setSettingsSection,
+    setSourceStatus,
+  });
 
   function persistSessionEntries(next: PromptSessionEntry[]) {
     setSessionEntries(next);
@@ -320,87 +292,6 @@ function App() {
     setSettingsOpen(false);
   }
 
-  async function hidePaletteWindow() {
-    return invoke("hide_palette_window");
-  }
-
-  function dismissGlobalShortcutNotice() {
-    localStorage.setItem(GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY, "true");
-    setIsGlobalShortcutNoticeHidden(true);
-    setChatStatus((current) => (current?.dismissKey === "global-shortcut" ? null : current));
-  }
-
-  async function startWindowDrag() {
-    if (!isTauriRuntime) {
-      return;
-    }
-
-    await getCurrentWindow().startDragging();
-  }
-
-  async function minimizeWindow() {
-    await getCurrentWindow().minimize();
-  }
-
-  async function toggleMaximizeWindow() {
-    const currentWindow = getCurrentWindow();
-    await currentWindow.toggleMaximize();
-    setIsWindowMaximized(await currentWindow.isMaximized());
-  }
-
-  async function closeWindow() {
-    await getCurrentWindow().close();
-  }
-
-  useEffect(() => {
-    if (!isTauriRuntime) {
-      return;
-    }
-
-    const currentWindow = getCurrentWindow();
-    let unlistenResize: (() => void) | undefined;
-    let cancelled = false;
-
-    async function syncWindowState() {
-      const maximized = await currentWindow.isMaximized();
-      if (!cancelled) {
-        setIsWindowMaximized(maximized);
-      }
-    }
-
-    void syncWindowState();
-    void currentWindow.onResized(async () => {
-      await syncWindowState();
-    }).then((unlisten) => {
-      unlistenResize = unlisten;
-    });
-
-    return () => {
-      cancelled = true;
-      unlistenResize?.();
-    };
-  }, [isTauriRuntime]);
-
-  useEffect(() => {
-    if (!isSettingsWindow || !isTauriRuntime) {
-      return;
-    }
-
-    let unlistenSettingsSection: (() => void) | undefined;
-
-    void listen<string>(SETTINGS_SECTION_EVENT, (event) => {
-      if (isSettingsSection(event.payload)) {
-        setSettingsSection(event.payload);
-      }
-    }).then((unlisten) => {
-      unlistenSettingsSection = unlisten;
-    });
-
-    return () => {
-      unlistenSettingsSection?.();
-    };
-  }, [isSettingsWindow, isTauriRuntime]);
-
   useEffect(() => {
     if (!providerMenuOpen) {
       return;
@@ -430,112 +321,6 @@ function App() {
     window.addEventListener("mousedown", onPointerDown);
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, [shouldShowSettings]);
-
-  useEffect(() => {
-    if (isSettingsWindow) {
-      return;
-    }
-
-    if (!isTauriRuntime) {
-      setSourceStatus({
-        tone: "warning",
-        message: BROWSER_PREVIEW_MESSAGE,
-      });
-      setChatStatus({
-        tone: "warning",
-        message: BROWSER_PREVIEW_MESSAGE,
-      });
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadShellState() {
-      const nextShellState = await invoke<AppShellState>("get_app_shell_state");
-      if (cancelled) {
-        return;
-      }
-
-      setShellState(nextShellState);
-
-      if (nextShellState.message && !isGlobalShortcutNoticeHidden) {
-        setChatStatus({
-          tone:
-            nextShellState.globalShortcutRegistered && !nextShellState.usedFallbackShortcut
-              ? "success"
-              : nextShellState.globalShortcutRegistered
-                ? "warning"
-                : "error",
-          message: nextShellState.message,
-          dismissKey: "global-shortcut",
-        });
-      }
-
-      const currentWindow = getCurrentWindow();
-      // Keep the window reachable after a normal minimize action.
-      await currentWindow.setSkipTaskbar(false);
-      await currentWindow.setAlwaysOnTop(nextShellState.globalShortcutRegistered);
-      if (nextShellState.globalShortcutRegistered) {
-        await currentWindow.setFocus();
-        promptRef.current?.focus();
-      }
-    }
-
-    void loadShellState();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isGlobalShortcutNoticeHidden, isSettingsWindow, isTauriRuntime]);
-
-  useEffect(() => {
-    if (!isTauriRuntime || isSettingsWindow) {
-      return;
-    }
-
-    const currentWindow = getCurrentWindow();
-    let unlistenWindowFocus: (() => void) | undefined;
-    let removeEscapeListener: (() => void) | undefined;
-
-    async function bindPaletteWindowBehavior() {
-      unlistenWindowFocus = await listen(FOCUS_PROMPT_EVENT, async () => {
-        promptRef.current?.focus();
-        await currentWindow.setAlwaysOnTop(true);
-        await currentWindow.setFocus();
-      });
-
-      const handleEscape = async (keyboardEvent: KeyboardEvent) => {
-        if (keyboardEvent.key !== "Escape" || !shellState?.globalShortcutRegistered) {
-          return;
-        }
-
-        if (providerMenuOpen) {
-          keyboardEvent.preventDefault();
-          setProviderMenuOpen(false);
-          return;
-        }
-
-        if (settingsOpen) {
-          keyboardEvent.preventDefault();
-          closeSettings();
-          return;
-        }
-
-        keyboardEvent.preventDefault();
-        await hidePaletteWindow();
-      };
-
-      window.addEventListener("keydown", handleEscape);
-      removeEscapeListener = () => window.removeEventListener("keydown", handleEscape);
-    }
-
-    void bindPaletteWindowBehavior();
-
-    return () => {
-      unlistenWindowFocus?.();
-      removeEscapeListener?.();
-    };
-  }, [isSettingsWindow, isTauriRuntime, providerMenuOpen, settingsOpen, shellState]);
 
   async function copyText(text: string, label: string) {
     try {
