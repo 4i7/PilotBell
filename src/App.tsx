@@ -7,7 +7,6 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type ProviderConfig, providerIsCloud } from "./domain/provider";
 import type { PromptInputPreferences } from "./domain/inputPreferences";
 import { DEFAULT_PROMPT_INPUT_PREFERENCES } from "./domain/inputPreferences";
 import { AppChrome } from "./components/AppChrome";
@@ -34,6 +33,7 @@ import {
 import { useDocumentJobs } from "./hooks/useDocumentJobs";
 import { useLocalSources } from "./hooks/useLocalSources";
 import { usePromptAttachments } from "./hooks/usePromptAttachments";
+import { usePromptSending } from "./hooks/usePromptSending";
 import { useProviderManagement } from "./hooks/useProviderManagement";
 import { useThemePreference } from "./hooks/useThemePreference";
 import {
@@ -45,9 +45,8 @@ import {
   loadPromptSession,
   savePromptSession,
 } from "./lib/sessionStore";
-import { type ProviderCommandError, sendProviderPrompt } from "./lib/providerCommands";
+import type { ProviderCommandError } from "./lib/providerCommands";
 import { formatBytes, formatRelativeTime, formatSessionTime } from "./lib/formatters";
-import { buildPromptWithAttachments } from "./lib/promptAttachments";
 import { type ProviderReadiness } from "./lib/providerHealthStore";
 import type { ThemePreference } from "./lib/themeStore";
 import "./App.css";
@@ -108,18 +107,6 @@ function toneForProviderError(error: ProviderCommandError): StatusTone {
   return "error";
 }
 
-function localValidationError(message: string): ProviderCommandError {
-  return {
-    kind: "validation",
-    message,
-    retryable: false,
-  };
-}
-
-function makeSessionEntryId() {
-  return `session-${crypto.randomUUID()}`;
-}
-
 function readinessLabel(readiness: ProviderReadiness) {
   switch (readiness) {
     case "ready":
@@ -160,12 +147,10 @@ function loadGlobalShortcutNoticeHidden() {
 
 function App() {
   const [prompt, setPrompt] = useState("");
-  const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
   const [shellState, setShellState] = useState<AppShellState | null>(null);
   const [sessionEntries, setSessionEntries] = useState<PromptSessionEntry[]>(() =>
     loadPromptSession(),
   );
-  const [pendingSendCount, setPendingSendCount] = useState(0);
   const [chatStatus, setChatStatus] = useState<InlineStatus | null>(null);
   const [inputPreferences, setInputPreferences] = useState<PromptInputPreferences>(() =>
     loadPromptInputPreferences(),
@@ -221,7 +206,6 @@ function App() {
     toneForProviderError,
   });
   const { themePreference, resolvedTheme, persistThemePreference } = useThemePreference();
-  const isSending = pendingSendCount > 0;
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -247,6 +231,26 @@ function App() {
       });
     },
   });
+  const { isSending, replyError, clearReplyError, requestPromptSubmit, sendPrompt } =
+    usePromptSending({
+      attachedFiles,
+      browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
+      cloudContextReviewAccepted,
+      hasLocalAttachmentContext,
+      inputPreferences,
+      isTauriRuntime,
+      prompt,
+      promptRef,
+      selectedProvider,
+      acceptCloudContextReview,
+      addSessionEntry,
+      clearAttachments,
+      openProviderSettings: () => openSettings("providers"),
+      resetCloudContextReview,
+      setChatStatus,
+      setPrompt,
+      toneForProviderError,
+    });
   const chatEntries = useMemo(() => [...sessionEntries].reverse(), [sessionEntries]);
   const hasSuccessfulSession = useMemo(
     () => sessionEntries.some((entry) => Boolean(entry.response)),
@@ -550,7 +554,7 @@ function App() {
 
   function clearSession() {
     persistSessionEntries([]);
-    setReplyError(null);
+    clearReplyError();
     setChatStatus({
       tone: "neutral",
       message: "Chat cleared.",
@@ -576,134 +580,6 @@ function App() {
       focusAfterSubmit: false,
       allowSubmitWhileSending: false,
     });
-  }
-
-  async function sendPrompt(
-    promptOverride?: string,
-    providerOverride?: ProviderConfig,
-    options: PromptInputPreferences = DEFAULT_PROMPT_INPUT_PREFERENCES,
-  ) {
-    if (!isTauriRuntime) {
-      setReplyError(localValidationError(BROWSER_PREVIEW_MESSAGE));
-      setChatStatus({
-        tone: "warning",
-        message: BROWSER_PREVIEW_MESSAGE,
-      });
-      return;
-    }
-
-    if (isSending && !options.allowSubmitWhileSending) {
-      const error = localValidationError("Wait for the current response before sending again.");
-      setReplyError(error);
-      setChatStatus({
-        tone: "warning",
-        message: error.message,
-      });
-      return;
-    }
-
-    const targetPrompt = promptOverride ?? prompt;
-    const targetProvider = providerOverride ?? selectedProvider;
-
-    if (!targetProvider) {
-      const error = localValidationError("Select a provider before sending.");
-      setReplyError(error);
-      setChatStatus({
-        tone: "warning",
-        message: error.message,
-      });
-      openSettings("providers");
-      return;
-    }
-    if (!targetPrompt.trim()) {
-      const error = localValidationError("Prompt is empty.");
-      setReplyError(error);
-      setChatStatus({
-        tone: "warning",
-        message: error.message,
-      });
-      return;
-    }
-
-    if (
-      providerIsCloud(targetProvider.kind) &&
-      hasLocalAttachmentContext &&
-      !cloudContextReviewAccepted
-    ) {
-      acceptCloudContextReview();
-      setChatStatus({
-        tone: "warning",
-        message:
-          "Local document excerpts may be included in prompts sent to the selected provider. Review the context before sending sensitive data. Press send again to continue.",
-      });
-      return;
-    }
-
-    setPendingSendCount((current) => current + 1);
-    setReplyError(null);
-
-    try {
-      const withAttachments = buildPromptWithAttachments(targetPrompt, attachedFiles);
-      const result = await sendProviderPrompt(withAttachments.preparedPrompt, targetProvider);
-      if (result.status === "success") {
-        addSessionEntry({
-          id: makeSessionEntryId(),
-          prompt: targetPrompt,
-          createdAt: new Date().toISOString(),
-          providerId: targetProvider.id,
-          providerName: result.data.provider,
-          model: result.data.model,
-          response: result.data.content,
-        });
-        if (promptOverride === undefined && options.clearOnSubmit) {
-          setPrompt("");
-        }
-        clearAttachments();
-        setChatStatus({
-          tone: "success",
-          message:
-            withAttachments.attachmentCount > 0
-              ? `Responded with ${result.data.provider} / ${result.data.model} using ${withAttachments.attachmentCount} attachment(s).`
-              : `Responded with ${result.data.provider} / ${result.data.model}.`,
-        });
-      } else {
-        setReplyError(result.error);
-        addSessionEntry({
-          id: makeSessionEntryId(),
-          prompt: targetPrompt,
-          createdAt: new Date().toISOString(),
-          providerId: targetProvider.id,
-          providerName: targetProvider.name,
-          model: targetProvider.model,
-          error: result.error.message,
-        });
-        setChatStatus({
-          tone: toneForProviderError(result.error),
-          message: result.error.retryable
-            ? "Provider request failed. Adjust settings and retry."
-            : "Provider request failed. Inspect provider state before retrying.",
-        });
-      }
-    } catch (err) {
-      const error = localValidationError(err instanceof Error ? err.message : String(err));
-      setReplyError(error);
-      setChatStatus({
-        tone: "error",
-        message: error.message,
-      });
-    } finally {
-      setPendingSendCount((current) => Math.max(0, current - 1));
-      if (options.focusAfterSubmit) {
-        promptRef.current?.focus();
-      }
-      if (attachedFiles.length === 0) {
-        resetCloudContextReview();
-      }
-    }
-  }
-
-  function requestPromptSubmit() {
-    void sendPrompt(undefined, undefined, inputPreferences);
   }
 
   const selectedProviderLabel = selectedProvider
