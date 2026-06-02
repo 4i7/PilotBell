@@ -37,6 +37,7 @@ import {
 import { useDocumentJobs } from "./hooks/useDocumentJobs";
 import { useLocalSources } from "./hooks/useLocalSources";
 import { useProviderManagement } from "./hooks/useProviderManagement";
+import { useThemePreference } from "./hooks/useThemePreference";
 import {
   loadPromptInputPreferences,
   savePromptInputPreferences,
@@ -50,13 +51,7 @@ import { type ProviderCommandError, sendProviderPrompt } from "./lib/providerCom
 import { formatBytes, formatRelativeTime, formatSessionTime } from "./lib/formatters";
 import { buildPromptWithAttachments, readAttachedPromptFile } from "./lib/promptAttachments";
 import { type ProviderReadiness } from "./lib/providerHealthStore";
-import {
-  type ResolvedTheme,
-  type ThemePreference,
-  loadThemePreference,
-  resolveThemePreference,
-  saveThemePreference,
-} from "./lib/themeStore";
+import type { ThemePreference } from "./lib/themeStore";
 import "./App.css";
 
 type StatusTone = "neutral" | "success" | "warning" | "error";
@@ -101,18 +96,6 @@ function hasTauriRuntime() {
     typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
     "undefined"
   );
-}
-
-function detectSystemTheme(): ResolvedTheme {
-  if (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-  ) {
-    return "dark";
-  }
-
-  return "light";
 }
 
 function toneForProviderError(error: ProviderCommandError): StatusTone {
@@ -186,16 +169,12 @@ function App() {
   );
   const [pendingSendCount, setPendingSendCount] = useState(0);
   const [chatStatus, setChatStatus] = useState<InlineStatus | null>(null);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
-    loadThemePreference(),
-  );
   const [inputPreferences, setInputPreferences] = useState<PromptInputPreferences>(() =>
     loadPromptInputPreferences(),
   );
   const [isGlobalShortcutNoticeHidden, setIsGlobalShortcutNoticeHidden] = useState(() =>
     loadGlobalShortcutNoticeHidden(),
   );
-  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => detectSystemTheme());
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
@@ -246,7 +225,7 @@ function App() {
     openProviderSettings: () => openSettings("providers"),
     toneForProviderError,
   });
-  const resolvedTheme = resolveThemePreference(themePreference, systemTheme);
+  const { themePreference, resolvedTheme, persistThemePreference } = useThemePreference();
   const isSending = pendingSendCount > 0;
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -277,11 +256,6 @@ function App() {
   function persistSessionEntries(next: PromptSessionEntry[]) {
     setSessionEntries(next);
     savePromptSession(next);
-  }
-
-  function persistThemePreference(next: ThemePreference) {
-    setThemePreference(next);
-    saveThemePreference(next);
   }
 
   function persistInputPreferences(next: PromptInputPreferences) {
@@ -357,50 +331,6 @@ function App() {
   async function closeWindow() {
     await getCurrentWindow().close();
   }
-
-  useEffect(() => {
-    if (!selectedProviderId && providers.length > 0) {
-      setSelectedProviderId(providers[0].id);
-      return;
-    }
-
-    if (
-      selectedProviderId &&
-      providers.length > 0 &&
-      !providers.some((provider) => provider.id === selectedProviderId)
-    ) {
-      setSelectedProviderId(providers[0].id);
-    }
-  }, [providers, selectedProviderId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const updateTheme = () => {
-      setSystemTheme(mediaQuery.matches ? "dark" : "light");
-    };
-
-    updateTheme();
-    mediaQuery.addEventListener("change", updateTheme);
-
-    return () => {
-      mediaQuery.removeEventListener("change", updateTheme);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-
-    const root = document.documentElement;
-    root.dataset.theme = resolvedTheme;
-    root.dataset.themePreference = themePreference;
-    root.style.colorScheme = resolvedTheme;
-  }, [resolvedTheme, themePreference]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
