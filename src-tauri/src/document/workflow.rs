@@ -17,6 +17,67 @@ use super::{
     DocumentWorkflowRequest, DocumentWorkflowResult, DOCUMENT_JOB_PROGRESS_EVENT,
 };
 
+struct WorkflowContext<'a> {
+    app: &'a AppHandle,
+    cancel_flag: Arc<AtomicBool>,
+    limits: DocumentLimits,
+    job_id: String,
+}
+
+impl<'a> WorkflowContext<'a> {
+    fn new(app: &'a AppHandle, cancel_flag: Arc<AtomicBool>, job_id: String) -> Self {
+        Self {
+            app,
+            cancel_flag,
+            limits: DocumentLimits::default(),
+            job_id,
+        }
+    }
+
+    fn check_cancelled(&self) -> Result<(), String> {
+        check_cancelled(self.cancel_flag.as_ref())
+    }
+
+    fn emit_progress(
+        &self,
+        phase: DocumentJobPhase,
+        current: u32,
+        total: u32,
+        message: impl Into<String>,
+    ) {
+        emit_progress(self.app, &self.job_id, phase, current, total, message);
+    }
+
+    fn fail<T>(&self, message: String) -> Result<T, String> {
+        fail_job(self.app, &self.job_id, message)
+    }
+}
+
+struct PreparedWorkflow {
+    input_path: PathBuf,
+    selected_template: String,
+    provider_id: Option<String>,
+    input_kind: WorkflowInputKind,
+    output_paths: OutputPaths,
+}
+
+struct OutputPaths {
+    markdown_path: PathBuf,
+    svg_path: PathBuf,
+    docx_path: PathBuf,
+}
+
+struct RenderedOutputs {
+    markdown: String,
+    svg: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WorkflowInputKind {
+    Pdf,
+    Spreadsheet,
+}
+
 #[derive(Default)]
 pub struct DocumentJobState {
     cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -96,171 +157,181 @@ fn run_document_workflow_blocking(
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<DocumentWorkflowResult, String> {
     let job_id = normalize_job_id(&request.job_id)?;
-    let limits = DocumentLimits::default();
-    check_cancelled(&cancel_flag)?;
+    let workflow = WorkflowContext::new(app, cancel_flag, job_id);
+    workflow.check_cancelled()?;
 
-    emit_progress(
-        app,
-        &job_id,
+    workflow.emit_progress(
         DocumentJobPhase::Reading,
         1,
         10,
         "Reading selected document metadata.",
     );
-    let input_path = canonical_file_path(&request.input_path)?;
-    let output_dir = canonical_output_dir(&request.output_dir)?;
-    let input_metadata = fs::metadata(&input_path)
-        .map_err(|error| format!("Failed to inspect input file: {error}"))?;
-    if input_metadata.len() > limits.max_input_bytes {
-        return fail_job(
-            app,
-            &job_id,
-            format!(
-                "Input file exceeds the {} MB limit.",
-                limits.max_input_bytes / 1024 / 1024
-            ),
-        );
-    }
+    let prepared = prepare_workflow(&workflow, request)?;
+    let analysis = analyze_document_input(&workflow, &prepared)?;
 
-    let extension = input_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    check_cancelled(&cancel_flag)?;
-    let analysis = match extension.as_str() {
-        "pdf" => {
-            emit_progress(
-                app,
-                &job_id,
-                DocumentJobPhase::ParsingPdf,
-                2,
-                10,
-                "Parsing PDF structure and page metadata.",
-            );
-            analyze_pdf(&input_path, &limits)?
-        }
-        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" => {
-            emit_progress(
-                app,
-                &job_id,
-                DocumentJobPhase::ParsingExcel,
-                2,
-                10,
-                "Reading workbook sheets and preview ranges.",
-            );
-            analyze_excel(&input_path, &limits)?
-        }
-        _ => {
-            return fail_job(
-                app,
-                &job_id,
-                "Supported document workflow inputs are PDF and Excel workbooks.".into(),
-            );
-        }
-    };
-
-    check_cancelled(&cancel_flag)?;
-    emit_progress(
-        app,
-        &job_id,
+    workflow.check_cancelled()?;
+    workflow.emit_progress(
         DocumentJobPhase::Validating,
         4,
         10,
         "Validating extracted metadata and workflow limits.",
     );
-    let output_stem = sanitize_output_stem(
-        input_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("document"),
-    );
-    let markdown_path = output_dir.join(format!("{output_stem}-review.md"));
-    let svg_path = output_dir.join(format!("{output_stem}-summary.svg"));
-    let docx_path = output_dir.join(format!("{output_stem}-report.docx"));
-    ensure_output_paths_available(&[&markdown_path, &svg_path, &docx_path], request.overwrite)?;
 
-    check_cancelled(&cancel_flag)?;
-    emit_progress(
-        app,
-        &job_id,
-        DocumentJobPhase::GeneratingMarkdown,
-        5,
-        10,
-        "Generating reviewable Markdown IR.",
-    );
-    let markdown = render_markdown(&analysis, request.selected_template.trim());
-
-    check_cancelled(&cancel_flag)?;
-    emit_progress(
-        app,
-        &job_id,
-        DocumentJobPhase::GeneratingSvg,
-        6,
-        10,
-        "Generating and sanitizing SVG summary.",
-    );
-    let svg = render_summary_svg(&analysis)?;
-
-    check_cancelled(&cancel_flag)?;
-    emit_progress(
-        app,
-        &job_id,
-        DocumentJobPhase::GeneratingDocx,
-        7,
-        10,
-        "Generating Word report.",
-    );
-
-    check_cancelled(&cancel_flag)?;
-    emit_progress(
-        app,
-        &job_id,
-        DocumentJobPhase::WritingOutput,
-        8,
-        10,
-        "Writing Markdown, SVG, and DOCX outputs.",
-    );
-    fs::write(&markdown_path, markdown.as_bytes()).map_err(|error| {
-        format!(
-            "Failed to write Markdown output {}: {error}",
-            markdown_path.display()
-        )
-    })?;
-    fs::write(&svg_path, svg.as_bytes())
-        .map_err(|error| format!("Failed to write SVG output {}: {error}", svg_path.display()))?;
-    write_docx(&docx_path, &markdown)?;
-    ensure_output_size(&markdown_path, &limits)?;
-    ensure_output_size(&svg_path, &limits)?;
-    ensure_output_size(&docx_path, &limits)?;
+    let rendered = render_workflow_outputs(&workflow, &analysis, &prepared.selected_template)?;
+    write_workflow_outputs(&workflow, &prepared.output_paths, &rendered)?;
 
     let metadata = build_metadata(
-        &job_id,
-        &input_path,
-        &markdown_path,
-        request.selected_template,
-        request.provider_id,
+        &workflow.job_id,
+        &prepared.input_path,
+        &prepared.output_paths.markdown_path,
+        prepared.selected_template,
+        prepared.provider_id,
         "completed",
         None,
     )?;
 
-    emit_progress(
-        app,
-        &job_id,
+    workflow.emit_progress(
         DocumentJobPhase::Completed,
         10,
         10,
         "Document workflow completed.",
     );
 
-    Ok(DocumentWorkflowResult {
+    Ok(build_workflow_result(
         metadata,
-        markdown_path: markdown_path.display().to_string(),
-        svg_path: svg_path.display().to_string(),
-        docx_path: docx_path.display().to_string(),
-        warnings: analysis.warnings,
+        prepared.output_paths,
+        analysis.warnings,
+    ))
+}
+
+fn prepare_workflow(
+    workflow: &WorkflowContext<'_>,
+    request: DocumentWorkflowRequest,
+) -> Result<PreparedWorkflow, String> {
+    let input_path = canonical_file_path(&request.input_path)?;
+    let output_dir = canonical_output_dir(&request.output_dir)?;
+    ensure_input_size(&input_path, &workflow.limits).or_else(|message| workflow.fail(message))?;
+
+    let input_kind = classify_input_kind(input_extension(&input_path).as_str())
+        .or_else(|message| workflow.fail(message))?;
+    let output_paths = build_output_paths(&output_dir, &input_path, request.overwrite)?;
+
+    Ok(PreparedWorkflow {
+        input_path,
+        selected_template: request.selected_template,
+        provider_id: request.provider_id,
+        input_kind,
+        output_paths,
     })
+}
+
+fn analyze_document_input(
+    workflow: &WorkflowContext<'_>,
+    prepared: &PreparedWorkflow,
+) -> Result<super::DocumentAnalysis, String> {
+    workflow.check_cancelled()?;
+
+    match prepared.input_kind {
+        WorkflowInputKind::Pdf => {
+            workflow.emit_progress(
+                DocumentJobPhase::ParsingPdf,
+                2,
+                10,
+                "Parsing PDF structure and page metadata.",
+            );
+            analyze_pdf(&prepared.input_path, &workflow.limits)
+        }
+        WorkflowInputKind::Spreadsheet => {
+            workflow.emit_progress(
+                DocumentJobPhase::ParsingExcel,
+                2,
+                10,
+                "Reading workbook sheets and preview ranges.",
+            );
+            analyze_excel(&prepared.input_path, &workflow.limits)
+        }
+    }
+}
+
+fn render_workflow_outputs(
+    workflow: &WorkflowContext<'_>,
+    analysis: &super::DocumentAnalysis,
+    selected_template: &str,
+) -> Result<RenderedOutputs, String> {
+    workflow.check_cancelled()?;
+    workflow.emit_progress(
+        DocumentJobPhase::GeneratingMarkdown,
+        5,
+        10,
+        "Generating reviewable Markdown IR.",
+    );
+    let markdown = render_markdown(analysis, selected_template.trim());
+
+    workflow.check_cancelled()?;
+    workflow.emit_progress(
+        DocumentJobPhase::GeneratingSvg,
+        6,
+        10,
+        "Generating and sanitizing SVG summary.",
+    );
+    let svg = render_summary_svg(analysis)?;
+
+    workflow.check_cancelled()?;
+    workflow.emit_progress(
+        DocumentJobPhase::GeneratingDocx,
+        7,
+        10,
+        "Generating Word report.",
+    );
+
+    Ok(RenderedOutputs { markdown, svg })
+}
+
+fn write_workflow_outputs(
+    workflow: &WorkflowContext<'_>,
+    output_paths: &OutputPaths,
+    rendered: &RenderedOutputs,
+) -> Result<(), String> {
+    workflow.check_cancelled()?;
+    workflow.emit_progress(
+        DocumentJobPhase::WritingOutput,
+        8,
+        10,
+        "Writing Markdown, SVG, and DOCX outputs.",
+    );
+
+    fs::write(&output_paths.markdown_path, rendered.markdown.as_bytes()).map_err(|error| {
+        format!(
+            "Failed to write Markdown output {}: {error}",
+            output_paths.markdown_path.display()
+        )
+    })?;
+    fs::write(&output_paths.svg_path, rendered.svg.as_bytes()).map_err(|error| {
+        format!(
+            "Failed to write SVG output {}: {error}",
+            output_paths.svg_path.display()
+        )
+    })?;
+    write_docx(&output_paths.docx_path, &rendered.markdown)?;
+    ensure_output_size(&output_paths.markdown_path, &workflow.limits)?;
+    ensure_output_size(&output_paths.svg_path, &workflow.limits)?;
+    ensure_output_size(&output_paths.docx_path, &workflow.limits)?;
+
+    Ok(())
+}
+
+fn build_workflow_result(
+    metadata: DocumentJobMetadata,
+    output_paths: OutputPaths,
+    warnings: Vec<String>,
+) -> DocumentWorkflowResult {
+    DocumentWorkflowResult {
+        metadata,
+        markdown_path: output_paths.markdown_path.display().to_string(),
+        svg_path: output_paths.svg_path.display().to_string(),
+        docx_path: output_paths.docx_path.display().to_string(),
+        warnings,
+    }
 }
 
 fn fail_job<T>(app: &AppHandle, job_id: &str, message: String) -> Result<T, String> {
@@ -331,6 +402,33 @@ fn canonical_output_dir(raw: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn ensure_input_size(path: &Path, limits: &DocumentLimits) -> Result<(), String> {
+    let input_metadata =
+        fs::metadata(path).map_err(|error| format!("Failed to inspect input file: {error}"))?;
+    if input_metadata.len() > limits.max_input_bytes {
+        return Err(format!(
+            "Input file exceeds the {} MB limit.",
+            limits.max_input_bytes / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
+
+fn input_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn classify_input_kind(extension: &str) -> Result<WorkflowInputKind, String> {
+    match extension {
+        "pdf" => Ok(WorkflowInputKind::Pdf),
+        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" => Ok(WorkflowInputKind::Spreadsheet),
+        _ => Err("Supported document workflow inputs are PDF and Excel workbooks.".into()),
+    }
+}
+
 pub fn sanitize_output_stem(value: &str) -> String {
     let mut stem = value
         .chars()
@@ -353,6 +451,35 @@ pub fn sanitize_output_stem(value: &str) -> String {
     } else {
         stem
     }
+}
+
+fn build_output_paths(
+    output_dir: &Path,
+    input_path: &Path,
+    overwrite: bool,
+) -> Result<OutputPaths, String> {
+    let output_stem = sanitize_output_stem(
+        input_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("document"),
+    );
+    let output_paths = OutputPaths {
+        markdown_path: output_dir.join(format!("{output_stem}-review.md")),
+        svg_path: output_dir.join(format!("{output_stem}-summary.svg")),
+        docx_path: output_dir.join(format!("{output_stem}-report.docx")),
+    };
+
+    ensure_output_paths_available(
+        &[
+            output_paths.markdown_path.as_path(),
+            output_paths.svg_path.as_path(),
+            output_paths.docx_path.as_path(),
+        ],
+        overwrite,
+    )?;
+
+    Ok(output_paths)
 }
 
 fn ensure_output_paths_available(paths: &[&Path], overwrite: bool) -> Result<(), String> {
@@ -423,7 +550,10 @@ fn timestamp_string() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_output_paths_available, sanitize_output_stem};
+    use super::{
+        build_output_paths, classify_input_kind, ensure_output_paths_available,
+        sanitize_output_stem, WorkflowInputKind,
+    };
     use std::fs;
 
     #[test]
@@ -451,6 +581,61 @@ mod tests {
         let error = ensure_output_paths_available(&[&output_path], false)
             .expect_err("existing output should require confirmation");
         assert!(error.contains("Confirm overwrite"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn classifies_supported_input_extensions() {
+        assert!(matches!(
+            classify_input_kind("pdf"),
+            Ok(WorkflowInputKind::Pdf)
+        ));
+        assert!(matches!(
+            classify_input_kind("xlsx"),
+            Ok(WorkflowInputKind::Spreadsheet)
+        ));
+        assert!(classify_input_kind("txt")
+            .expect_err("unsupported extension should fail")
+            .contains("Supported document workflow inputs"));
+    }
+
+    #[test]
+    fn builds_output_paths_from_sanitized_input_stem() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pilotbell-output-paths-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let input_path = temp_dir.join("Quarterly Report final.xlsx");
+        fs::write(&input_path, "placeholder").expect("input placeholder should be written");
+
+        let output_paths =
+            build_output_paths(&temp_dir, &input_path, false).expect("paths should build");
+        assert_eq!(
+            output_paths
+                .markdown_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("Quarterly_Report_final-review.md")
+        );
+        assert_eq!(
+            output_paths
+                .svg_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("Quarterly_Report_final-summary.svg")
+        );
+        assert_eq!(
+            output_paths
+                .docx_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("Quarterly_Report_final-report.docx")
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
