@@ -184,6 +184,10 @@
   background: var(--bg-subtle);
 }
 
+.progress-panel-failed {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border-soft));
+}
+
 .progress-track {
   width: 100%;
   height: 8px;
@@ -349,6 +353,11 @@
 
 .source-notes {
   color: var(--text-secondary);
+}
+
+.document-warning-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
 }
 
 .empty {

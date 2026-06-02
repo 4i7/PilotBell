@@ -1,14 +1,12 @@
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { DocumentJobDraft, DocumentJobMetadata, DocumentJobProgress } from "../domain/document";
-import type { ProviderConfig } from "../domain/provider";
+import { documentFailureGuidance, type DocumentJobDraft, type DocumentJobMetadata, type DocumentJobProgress } from "../domain/document";
 import { ProgressPanel } from "./ProgressPanel";
 
 type DocumentWorkflowPanelProps = {
   draft: DocumentJobDraft;
   setDraft: (draft: DocumentJobDraft) => void;
   jobs: DocumentJobMetadata[];
-  providers: ProviderConfig[];
   progress: DocumentJobProgress | null;
   statusMessage: string;
   isRunning: boolean;
@@ -22,7 +20,6 @@ export function DocumentWorkflowPanel({
   draft,
   setDraft,
   jobs,
-  providers,
   progress,
   statusMessage,
   isRunning,
@@ -60,6 +57,8 @@ export function DocumentWorkflowPanel({
     }
   }
 
+  const latestFailure = jobs.find((job) => job.status === "failed") ?? null;
+
   return (
     <div className="settings-section">
       <div className="settings-summary-card">
@@ -67,14 +66,15 @@ export function DocumentWorkflowPanel({
           <h3>Document workflow</h3>
           <p>
             Analyze a selected PDF or Excel workbook in Rust, then generate reviewable Markdown,
-            sanitized SVG, and DOCX outputs. Document text is not stored in localStorage.
+            sanitized SVG, and DOCX outputs. Document text is not stored in localStorage and is not
+            sent to a provider by this workflow today.
           </p>
         </div>
       </div>
 
-      <div className="notice notice-warning">
-        Local document excerpts may be included in prompts sent to the selected provider. Review the
-        context before sending sensitive data.
+      <div className="notice notice-neutral">
+        Provider-assisted drafting is reserved for a future slice. The current document workflow
+        runs locally in Rust, and provider selection is intentionally disabled until that changes.
       </div>
 
       <div className="settings-grid">
@@ -103,15 +103,11 @@ export function DocumentWorkflowPanel({
           <option value="executive-brief">Executive brief</option>
         </select>
         <select
-          value={draft.providerId}
-          onChange={(event) => setDraft({ ...draft, providerId: event.currentTarget.value })}
+          value=""
+          disabled
+          aria-label="Provider-assisted drafting is not available yet"
         >
-          <option value="">No LLM provider selected</option>
-          {providers.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.name} / {provider.model || "model not set"}
-            </option>
-          ))}
+          <option value="">Provider-assisted drafting reserved for future release</option>
         </select>
       </div>
 
@@ -121,7 +117,7 @@ export function DocumentWorkflowPanel({
           checked={draft.overwrite}
           onChange={(event) => setDraft({ ...draft, overwrite: event.currentTarget.checked })}
         />
-        Confirm overwrite when output files already exist
+        Allow overwrite when output files already exist
       </label>
 
       <div className="settings-actions">
@@ -142,6 +138,14 @@ export function DocumentWorkflowPanel({
         progress={progress}
         message={statusMessage || "No document workflow is running."}
         isRunning={isRunning}
+        failure={
+          latestFailure?.errorSummary && latestFailure.failureKind
+            ? {
+                summary: latestFailure.errorSummary,
+                kind: latestFailure.failureKind,
+              }
+            : null
+        }
         onCancel={onCancel}
       />
 
@@ -158,6 +162,21 @@ export function DocumentWorkflowPanel({
                 </div>
                 <p className="source-path">{job.outputPath}</p>
                 {job.errorSummary ? <p className="source-notes">{job.errorSummary}</p> : null}
+                {job.failureKind ? (
+                  <p className="source-notes">{documentFailureGuidance(job.failureKind)}</p>
+                ) : null}
+                {job.warnings && job.warnings.length > 0 ? (
+                  <div className="notice notice-warning">
+                    <div>
+                      <strong>Warnings</strong>
+                      <ul className="document-warning-list">
+                        {job.warnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </li>
           ))}

@@ -1,4 +1,4 @@
-import type { DocumentJobMetadata } from "../domain/document";
+import { type DocumentFailureKind, type DocumentJobMetadata } from "../domain/document";
 
 const STORAGE_KEY = "pilotbell.documentJobs";
 const MAX_DOCUMENT_JOBS = 30;
@@ -31,7 +31,24 @@ function normalizeDocumentJobMetadata(value: unknown): DocumentJobMetadata | nul
     selectedTemplate: item.selectedTemplate,
     providerId: typeof item.providerId === "string" ? item.providerId : null,
     errorSummary: typeof item.errorSummary === "string" ? item.errorSummary : null,
+    warnings: Array.isArray(item.warnings)
+      ? item.warnings.filter((warning): warning is string => typeof warning === "string")
+      : [],
+    failureKind: isDocumentFailureKind(item.failureKind) ? item.failureKind : null,
   };
+}
+
+function isDocumentFailureKind(value: unknown): value is DocumentFailureKind {
+  return (
+    value === "cancelled" ||
+    value === "unsupported_input" ||
+    value === "input_path" ||
+    value === "output_path" ||
+    value === "output_exists" ||
+    value === "size_limit" ||
+    value === "parse_failure" ||
+    value === "unknown"
+  );
 }
 
 export function loadDocumentJobs(): DocumentJobMetadata[] {
