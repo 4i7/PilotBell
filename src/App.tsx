@@ -1,6 +1,4 @@
 import {
-  type ChangeEvent,
-  type DragEvent,
   useEffect,
   useMemo,
   useRef,
@@ -10,7 +8,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ProviderConfig, providerIsCloud } from "./domain/provider";
-import type { AttachedPromptFile } from "./domain/prompt";
 import type { PromptInputPreferences } from "./domain/inputPreferences";
 import { DEFAULT_PROMPT_INPUT_PREFERENCES } from "./domain/inputPreferences";
 import { AppChrome } from "./components/AppChrome";
@@ -36,6 +33,7 @@ import {
 } from "./components/icons";
 import { useDocumentJobs } from "./hooks/useDocumentJobs";
 import { useLocalSources } from "./hooks/useLocalSources";
+import { usePromptAttachments } from "./hooks/usePromptAttachments";
 import { useProviderManagement } from "./hooks/useProviderManagement";
 import { useThemePreference } from "./hooks/useThemePreference";
 import {
@@ -49,7 +47,7 @@ import {
 } from "./lib/sessionStore";
 import { type ProviderCommandError, sendProviderPrompt } from "./lib/providerCommands";
 import { formatBytes, formatRelativeTime, formatSessionTime } from "./lib/formatters";
-import { buildPromptWithAttachments, readAttachedPromptFile } from "./lib/promptAttachments";
+import { buildPromptWithAttachments } from "./lib/promptAttachments";
 import { type ProviderReadiness } from "./lib/providerHealthStore";
 import type { ThemePreference } from "./lib/themeStore";
 import "./App.css";
@@ -180,9 +178,6 @@ function App() {
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>(getInitialSettingsSection);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
-  const [attachedFiles, setAttachedFiles] = useState<AttachedPromptFile[]>([]);
-  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [cloudContextReviewAccepted, setCloudContextReviewAccepted] = useState(false);
 
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const isSettingsWindow = useMemo(() => isSettingsWindowView(), []);
@@ -231,6 +226,27 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const {
+    attachedFiles,
+    isDraggingFiles,
+    cloudContextReviewAccepted,
+    hasLocalAttachmentContext,
+    acceptCloudContextReview,
+    resetCloudContextReview,
+    clearAttachments,
+    onFileInputChange,
+    onComposerDragOver,
+    onComposerDragLeave,
+    onComposerDrop,
+    removeAttachment,
+  } = usePromptAttachments({
+    onAttachmentsAdded: (count) => {
+      setChatStatus({
+        tone: "neutral",
+        message: `${count} attachment(s) added to the next prompt.`,
+      });
+    },
+  });
   const chatEntries = useMemo(() => [...sessionEntries].reverse(), [sessionEntries]);
   const hasSuccessfulSession = useMemo(
     () => sessionEntries.some((entry) => Boolean(entry.response)),
@@ -609,9 +625,12 @@ function App() {
       return;
     }
 
-    const hasLocalExcerpts = attachedFiles.some((file) => Boolean(file.textContent));
-    if (providerIsCloud(targetProvider.kind) && hasLocalExcerpts && !cloudContextReviewAccepted) {
-      setCloudContextReviewAccepted(true);
+    if (
+      providerIsCloud(targetProvider.kind) &&
+      hasLocalAttachmentContext &&
+      !cloudContextReviewAccepted
+    ) {
+      acceptCloudContextReview();
       setChatStatus({
         tone: "warning",
         message:
@@ -639,8 +658,7 @@ function App() {
         if (promptOverride === undefined && options.clearOnSubmit) {
           setPrompt("");
         }
-        setAttachedFiles([]);
-        setCloudContextReviewAccepted(false);
+        clearAttachments();
         setChatStatus({
           tone: "success",
           message:
@@ -679,63 +697,13 @@ function App() {
         promptRef.current?.focus();
       }
       if (attachedFiles.length === 0) {
-        setCloudContextReviewAccepted(false);
+        resetCloudContextReview();
       }
     }
   }
 
   function requestPromptSubmit() {
     void sendPrompt(undefined, undefined, inputPreferences);
-  }
-
-  async function handleAttachFiles(fileList: FileList | File[]) {
-    const nextFiles = Array.from(fileList);
-    if (nextFiles.length === 0) {
-      return;
-    }
-
-    const loaded = await Promise.all(nextFiles.map((file) => readAttachedPromptFile(file)));
-    setAttachedFiles((current) => [...current, ...loaded]);
-    setCloudContextReviewAccepted(false);
-    setChatStatus({
-      tone: "neutral",
-      message: `${loaded.length} attachment(s) added to the next prompt.`,
-    });
-  }
-
-  async function onFileInputChange(event: ChangeEvent<HTMLInputElement>) {
-    if (!event.currentTarget.files) {
-      return;
-    }
-
-    await handleAttachFiles(event.currentTarget.files);
-    event.currentTarget.value = "";
-  }
-
-  function removeAttachment(id: string) {
-    setAttachedFiles((current) => current.filter((file) => file.id !== id));
-    setCloudContextReviewAccepted(false);
-  }
-
-  function onComposerDragOver(event: DragEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsDraggingFiles(true);
-  }
-
-  function onComposerDragLeave(event: DragEvent<HTMLFormElement>) {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      setIsDraggingFiles(false);
-    }
-  }
-
-  async function onComposerDrop(event: DragEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsDraggingFiles(false);
-    if (event.dataTransfer.files.length === 0) {
-      return;
-    }
-
-    await handleAttachFiles(event.dataTransfer.files);
   }
 
   const selectedProviderLabel = selectedProvider
