@@ -165,10 +165,6 @@ function App() {
   const {
     attachedFiles,
     isDraggingFiles,
-    cloudContextReviewAccepted,
-    hasLocalAttachmentContext,
-    acceptCloudContextReview,
-    resetCloudContextReview,
     clearAttachments,
     onFileInputChange,
     onComposerDragOver,
@@ -183,26 +179,30 @@ function App() {
       });
     },
   });
-  const { isSending, replyError, clearReplyError, requestPromptSubmit, sendPrompt } =
-    usePromptSending({
-      attachedFiles,
-      browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
-      cloudContextReviewAccepted,
-      hasLocalAttachmentContext,
-      inputPreferences,
-      isTauriRuntime,
-      prompt,
-      promptRef,
-      selectedProvider,
-      acceptCloudContextReview,
-      addSessionEntry,
-      clearAttachments,
-      openProviderSettings: () => openSettings("providers"),
-      resetCloudContextReview,
-      setChatStatus,
-      setPrompt,
-      toneForProviderError,
-    });
+  const {
+    isSending,
+    replyError,
+    pendingPromptContextPreview,
+    clearReplyError,
+    cancelPromptReview,
+    approvePromptReview,
+    requestPromptSubmit,
+    sendPrompt,
+  } = usePromptSending({
+    attachedFiles,
+    browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
+    inputPreferences,
+    isTauriRuntime,
+    prompt,
+    promptRef,
+    selectedProvider,
+    addSessionEntry,
+    clearAttachments,
+    openProviderSettings: () => openSettings("providers"),
+    setChatStatus,
+    setPrompt,
+    toneForProviderError,
+  });
   const chatEntries = useMemo(() => [...sessionEntries].reverse(), [sessionEntries]);
   const hasSuccessfulSession = useMemo(
     () => sessionEntries.some((entry) => Boolean(entry.response)),
@@ -406,6 +406,7 @@ function App() {
                 prompt={prompt}
                 setPrompt={setPrompt}
                 attachedFiles={attachedFiles}
+                pendingPromptContextPreview={pendingPromptContextPreview}
                 isDraggingFiles={isDraggingFiles}
                 isSending={isSending}
                 isTauriRuntime={isTauriRuntime}
@@ -441,6 +442,8 @@ function App() {
                 onDragLeave={onComposerDragLeave}
                 onDrop={(event) => void onComposerDrop(event)}
                 removeAttachment={removeAttachment}
+                approvePromptReview={approvePromptReview}
+                cancelPromptReview={cancelPromptReview}
                 openProviderSettings={() => openSettings("providers")}
                 testProvider={() => void testProvider()}
                 clearSession={clearSession}
@@ -531,7 +534,6 @@ function App() {
                 draft={documentJobs.draft}
                 setDraft={documentJobs.setDraft}
                 jobs={documentJobs.jobs}
-                providers={providers}
                 progress={documentJobs.activeProgress ?? documentJobs.latestProgress}
                 statusMessage={documentJobs.statusMessage}
                 isRunning={documentJobs.isRunning}

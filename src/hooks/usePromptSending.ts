@@ -1,11 +1,12 @@
-import { type RefObject, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 
-import { providerIsCloud, type ProviderConfig } from "../domain/provider";
+import type { PromptContextPreview } from "../domain/prompt";
+import type { ProviderConfig } from "../domain/provider";
 import type { PromptInputPreferences } from "../domain/inputPreferences";
 import type { AttachedPromptFile } from "../domain/prompt";
 import type { PromptSessionEntry } from "../lib/sessionStore";
 import { type ProviderCommandError, sendProviderPrompt } from "../lib/providerCommands";
-import { buildPromptWithAttachments } from "../lib/promptAttachments";
+import { buildPromptContextPreview, buildPromptWithAttachments } from "../lib/promptAttachments";
 
 type PromptStatus = {
   tone: "neutral" | "success" | "warning" | "error";
@@ -16,21 +17,25 @@ type PromptStatus = {
 type UsePromptSendingOptions = {
   attachedFiles: AttachedPromptFile[];
   browserPreviewMessage: string;
-  cloudContextReviewAccepted: boolean;
-  hasLocalAttachmentContext: boolean;
   inputPreferences: PromptInputPreferences;
   isTauriRuntime: boolean;
   prompt: string;
   promptRef: RefObject<HTMLTextAreaElement | null>;
   selectedProvider: ProviderConfig | null;
-  acceptCloudContextReview: () => void;
   addSessionEntry: (entry: PromptSessionEntry) => void;
   clearAttachments: () => void;
   openProviderSettings: () => void;
-  resetCloudContextReview: () => void;
   setChatStatus: (status: PromptStatus | null) => void;
   setPrompt: (prompt: string) => void;
   toneForProviderError: (error: ProviderCommandError) => PromptStatus["tone"];
+};
+
+type PendingPromptReview = {
+  preview: PromptContextPreview;
+  prompt: string;
+  provider: ProviderConfig;
+  options: PromptInputPreferences;
+  clearPromptOnSuccess: boolean;
 };
 
 function localValidationError(message: string): ProviderCommandError {
@@ -48,34 +53,37 @@ function makeSessionEntryId() {
 export function usePromptSending({
   attachedFiles,
   browserPreviewMessage,
-  cloudContextReviewAccepted,
-  hasLocalAttachmentContext,
   inputPreferences,
   isTauriRuntime,
   prompt,
   promptRef,
   selectedProvider,
-  acceptCloudContextReview,
   addSessionEntry,
   clearAttachments,
   openProviderSettings,
-  resetCloudContextReview,
   setChatStatus,
   setPrompt,
   toneForProviderError,
 }: UsePromptSendingOptions) {
   const [replyError, setReplyError] = useState<ProviderCommandError | null>(null);
   const [pendingSendCount, setPendingSendCount] = useState(0);
+  const [pendingReview, setPendingReview] = useState<PendingPromptReview | null>(null);
   const isSending = pendingSendCount > 0;
+
+  useEffect(() => {
+    setPendingReview(null);
+  }, [attachedFiles, prompt, selectedProvider?.id]);
 
   function clearReplyError() {
     setReplyError(null);
   }
 
-  async function sendPrompt(
-    promptOverride?: string,
-    providerOverride?: ProviderConfig,
-    options: PromptInputPreferences = inputPreferences,
+  async function performSend(
+    targetPrompt: string,
+    targetProvider: ProviderConfig,
+    options: PromptInputPreferences,
+    clearPromptOnSuccess: boolean,
+    preview?: PromptContextPreview,
   ) {
     if (!isTauriRuntime) {
       setReplyError(localValidationError(browserPreviewMessage));
@@ -96,49 +104,17 @@ export function usePromptSending({
       return;
     }
 
-    const targetPrompt = promptOverride ?? prompt;
-    const targetProvider = providerOverride ?? selectedProvider;
-
-    if (!targetProvider) {
-      const error = localValidationError("Select a provider before sending.");
-      setReplyError(error);
-      setChatStatus({
-        tone: "warning",
-        message: error.message,
-      });
-      openProviderSettings();
-      return;
-    }
-    if (!targetPrompt.trim()) {
-      const error = localValidationError("Prompt is empty.");
-      setReplyError(error);
-      setChatStatus({
-        tone: "warning",
-        message: error.message,
-      });
-      return;
-    }
-
-    if (
-      providerIsCloud(targetProvider.kind) &&
-      hasLocalAttachmentContext &&
-      !cloudContextReviewAccepted
-    ) {
-      acceptCloudContextReview();
-      setChatStatus({
-        tone: "warning",
-        message:
-          "Local document excerpts may be included in prompts sent to the selected provider. Review the context before sending sensitive data. Press send again to continue.",
-      });
-      return;
-    }
-
     setPendingSendCount((current) => current + 1);
     setReplyError(null);
 
     try {
-      const withAttachments = buildPromptWithAttachments(targetPrompt, attachedFiles);
-      const result = await sendProviderPrompt(withAttachments.preparedPrompt, targetProvider);
+      const withAttachments =
+        preview ?? buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
+      const preparedPrompt =
+        attachedFiles.length > 0
+          ? withAttachments.preparedPrompt
+          : buildPromptWithAttachments(targetPrompt, attachedFiles).preparedPrompt;
+      const result = await sendProviderPrompt(preparedPrompt, targetProvider);
       if (result.status === "success") {
         addSessionEntry({
           id: makeSessionEntryId(),
@@ -149,15 +125,15 @@ export function usePromptSending({
           model: result.data.model,
           response: result.data.content,
         });
-        if (promptOverride === undefined && options.clearOnSubmit) {
+        if (clearPromptOnSuccess && options.clearOnSubmit) {
           setPrompt("");
         }
         clearAttachments();
         setChatStatus({
           tone: "success",
           message:
-            withAttachments.attachmentCount > 0
-              ? `Responded with ${result.data.provider} / ${result.data.model} using ${withAttachments.attachmentCount} attachment(s).`
+            attachedFiles.length > 0
+              ? `Responded with ${result.data.provider} / ${result.data.model} using ${attachedFiles.length} attachment(s).`
               : `Responded with ${result.data.provider} / ${result.data.model}.`,
         });
       } else {
@@ -190,10 +166,80 @@ export function usePromptSending({
       if (options.focusAfterSubmit) {
         promptRef.current?.focus();
       }
-      if (attachedFiles.length === 0) {
-        resetCloudContextReview();
-      }
     }
+  }
+
+  async function sendPrompt(
+    promptOverride?: string,
+    providerOverride?: ProviderConfig,
+    options: PromptInputPreferences = inputPreferences,
+  ) {
+    const targetPrompt = promptOverride ?? prompt;
+    const targetProvider = providerOverride ?? selectedProvider;
+
+    if (!targetProvider) {
+      const error = localValidationError("Select a provider before sending.");
+      setReplyError(error);
+      setChatStatus({
+        tone: "warning",
+        message: error.message,
+      });
+      openProviderSettings();
+      return;
+    }
+    if (!targetPrompt.trim()) {
+      const error = localValidationError("Prompt is empty.");
+      setReplyError(error);
+      setChatStatus({
+        tone: "warning",
+        message: error.message,
+      });
+      return;
+    }
+
+    if (attachedFiles.length > 0) {
+      const preview = buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
+      setPendingReview({
+        preview,
+        prompt: targetPrompt,
+        provider: targetProvider,
+        options,
+        clearPromptOnSuccess: promptOverride === undefined,
+      });
+      setChatStatus({
+        tone: preview.requiresCloudReview ? "warning" : "neutral",
+        message: preview.requiresCloudReview
+          ? "Review the exact attachment context before sending it to the selected cloud provider."
+          : "Review the exact attachment context before sending it to the selected local provider.",
+      });
+      return;
+    }
+
+    await performSend(targetPrompt, targetProvider, options, promptOverride === undefined);
+  }
+
+  function cancelPromptReview() {
+    setPendingReview(null);
+    setChatStatus({
+      tone: "neutral",
+      message: "Attachment context review dismissed. Edit the prompt or send again when ready.",
+    });
+  }
+
+  function approvePromptReview() {
+    if (!pendingReview) {
+      return;
+    }
+
+    const nextReview = pendingReview;
+    setPendingReview(null);
+    void performSend(
+      nextReview.prompt,
+      nextReview.provider,
+      nextReview.options,
+      nextReview.clearPromptOnSuccess,
+      nextReview.preview,
+    );
   }
 
   function requestPromptSubmit() {
@@ -203,7 +249,10 @@ export function usePromptSending({
   return {
     isSending,
     replyError,
+    pendingPromptContextPreview: pendingReview?.preview ?? null,
     clearReplyError,
+    cancelPromptReview,
+    approvePromptReview,
     requestPromptSubmit,
     sendPrompt,
   };

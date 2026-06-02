@@ -1,4 +1,13 @@
+import {
+  classifyProviderEndpoint,
+  providerIsCloud,
+  type ProviderConfig,
+} from "../domain/provider";
 import type { AttachedPromptFile } from "../domain/prompt";
+import type {
+  PromptContextPreview,
+  PromptContextPreviewAttachment,
+} from "../domain/prompt";
 import { formatBytes } from "./formatters";
 
 const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
@@ -30,6 +39,57 @@ export function buildPromptWithAttachments(prompt: string, files: AttachedPrompt
   return {
     preparedPrompt: `Use the following attached file context when it is relevant.\n\n${attachmentBlock}\n\nUser prompt:\n${prompt}`,
     attachmentCount: files.length,
+  };
+}
+
+function describeAttachment(file: AttachedPromptFile): PromptContextPreviewAttachment {
+  return {
+    id: file.id,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    excerpt: file.textContent ?? null,
+    note: file.note ?? null,
+    textTruncated: file.textTruncated ?? false,
+    includedCharCount: file.textContent?.length ?? 0,
+  };
+}
+
+export function buildPromptContextPreview(
+  prompt: string,
+  files: AttachedPromptFile[],
+  provider: ProviderConfig,
+): PromptContextPreview {
+  const { preparedPrompt } = buildPromptWithAttachments(prompt, files);
+  const attachments = files.map(describeAttachment);
+  const endpointRisk = classifyProviderEndpoint(provider.kind, provider.endpoint);
+  const warnings = attachments
+    .flatMap((file) => {
+      const nextWarnings = [];
+      if (file.note) {
+        nextWarnings.push(`${file.name}: ${file.note}`);
+      }
+      if (file.textTruncated) {
+        nextWarnings.push(`${file.name}: Attachment text was truncated before prompt injection.`);
+      }
+      return nextWarnings;
+    })
+    .filter((warning, index, values) => values.indexOf(warning) === index);
+
+  return {
+    preparedPrompt,
+    providerLabel: `${provider.name} / ${provider.model || "model not set"}`,
+    providerEndpoint: provider.endpoint,
+    providerRisk: {
+      tone: endpointRisk.tone,
+      summary: providerIsCloud(provider.kind)
+        ? `Cloud provider. ${endpointRisk.message}`
+        : `Local provider. ${endpointRisk.message}`,
+    },
+    attachments,
+    warnings,
+    estimatedChars: preparedPrompt.length,
+    requiresCloudReview: providerIsCloud(provider.kind),
   };
 }
 
@@ -98,6 +158,7 @@ export async function readAttachedPromptFile(file: File): Promise<AttachedPrompt
 
   attachment.textContent = rawText.slice(0, MAX_ATTACHMENT_TEXT_CHARS);
   if (rawText.length > MAX_ATTACHMENT_TEXT_CHARS) {
+    attachment.textTruncated = true;
     attachment.note = "Attachment text was truncated before prompt injection.";
   }
   return attachment;

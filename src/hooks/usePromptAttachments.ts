@@ -10,21 +10,9 @@ type UsePromptAttachmentsOptions = {
 export function usePromptAttachments({ onAttachmentsAdded }: UsePromptAttachmentsOptions) {
   const [attachedFiles, setAttachedFiles] = useState<AttachedPromptFile[]>([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [cloudContextReviewAccepted, setCloudContextReviewAccepted] = useState(false);
-
-  const hasLocalAttachmentContext = attachedFiles.some((file) => Boolean(file.textContent));
-
-  function acceptCloudContextReview() {
-    setCloudContextReviewAccepted(true);
-  }
-
-  function resetCloudContextReview() {
-    setCloudContextReviewAccepted(false);
-  }
 
   function clearAttachments() {
     setAttachedFiles([]);
-    resetCloudContextReview();
   }
 
   async function handleAttachFiles(fileList: FileList | File[]) {
@@ -35,7 +23,6 @@ export function usePromptAttachments({ onAttachmentsAdded }: UsePromptAttachment
 
     const loaded = await Promise.all(nextFiles.map((file) => readAttachedPromptFile(file)));
     setAttachedFiles((current) => [...current, ...loaded]);
-    resetCloudContextReview();
     onAttachmentsAdded(loaded.length);
   }
 
@@ -50,7 +37,6 @@ export function usePromptAttachments({ onAttachmentsAdded }: UsePromptAttachment
 
   function removeAttachment(id: string) {
     setAttachedFiles((current) => current.filter((file) => file.id !== id));
-    resetCloudContextReview();
   }
 
   function onComposerDragOver(event: DragEvent<HTMLFormElement>) {
@@ -77,10 +63,6 @@ export function usePromptAttachments({ onAttachmentsAdded }: UsePromptAttachment
   return {
     attachedFiles,
     isDraggingFiles,
-    cloudContextReviewAccepted,
-    hasLocalAttachmentContext,
-    acceptCloudContextReview,
-    resetCloudContextReview,
     clearAttachments,
     onFileInputChange,
     onComposerDragOver,

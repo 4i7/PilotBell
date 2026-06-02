@@ -8,11 +8,12 @@ import {
   useCallback,
 } from "react";
 import type { ProviderConfig } from "../domain/provider";
-import type { AttachedPromptFile } from "../domain/prompt";
+import type { AttachedPromptFile, PromptContextPreview } from "../domain/prompt";
 import type { PromptInputPreferences } from "../domain/inputPreferences";
 import { useAutoResizeTextarea } from "../hooks/useAutoResizeTextarea";
 import { usePromptSubmitHotkey } from "../hooks/usePromptSubmitHotkey";
 import type { ProviderHealthRecord, ProviderReadiness } from "../lib/providerHealthStore";
+import { PromptContextPreviewPanel } from "./PromptContextPreviewPanel";
 import { ProviderSelector } from "./ProviderSelector";
 import { StatusLine } from "./StatusLine";
 
@@ -27,6 +28,7 @@ type PromptComposerProps = {
   prompt: string;
   setPrompt: (value: string) => void;
   attachedFiles: AttachedPromptFile[];
+  pendingPromptContextPreview: PromptContextPreview | null;
   isDraggingFiles: boolean;
   isSending: boolean;
   isTauriRuntime: boolean;
@@ -57,6 +59,8 @@ type PromptComposerProps = {
   onDragLeave: (event: DragEvent<HTMLFormElement>) => void;
   onDrop: (event: DragEvent<HTMLFormElement>) => void;
   removeAttachment: (attachmentId: string) => void;
+  approvePromptReview: () => void;
+  cancelPromptReview: () => void;
   openProviderSettings: () => void;
   testProvider: () => void;
   clearSession: () => void;
@@ -66,6 +70,7 @@ export function PromptComposer({
   prompt,
   setPrompt,
   attachedFiles,
+  pendingPromptContextPreview,
   isDraggingFiles,
   isSending,
   isTauriRuntime,
@@ -96,6 +101,8 @@ export function PromptComposer({
   onDragLeave,
   onDrop,
   removeAttachment,
+  approvePromptReview,
+  cancelPromptReview,
   openProviderSettings,
   testProvider,
   clearSession,
@@ -183,6 +190,14 @@ export function PromptComposer({
             </div>
           ))}
         </div>
+      ) : null}
+
+      {pendingPromptContextPreview ? (
+        <PromptContextPreviewPanel
+          preview={pendingPromptContextPreview}
+          onApprove={approvePromptReview}
+          onCancel={cancelPromptReview}
+        />
       ) : null}
 
       <div className="composer-layout">
