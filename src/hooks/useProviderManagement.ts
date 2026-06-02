@@ -1,10 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
-  ANTHROPIC_PROVIDER_KIND,
-  DEFAULT_PROVIDER_KIND,
-  LLAMA_CPP_PROVIDER_KIND,
-  OLLAMA_PROVIDER_KIND,
   type ProviderConfig,
   type ProviderDraft,
   classifyProviderEndpoint,
@@ -14,38 +10,21 @@ import {
   providerRequiresApiKey,
 } from "../domain/provider";
 import {
-  type ProviderCommandError,
   deleteProviderSecret,
   diagnoseProviderSecret,
   storeProviderSecret,
   testProviderConnection,
 } from "../lib/providerCommands";
-import {
-  ANTHROPIC_PROVIDER_DRAFT,
-  DEFAULT_PROVIDER_DRAFT,
-  LLAMA_CPP_PROVIDER_DRAFT,
-  OLLAMA_PROVIDER_DRAFT,
-} from "../lib/providerDrafts";
-import {
-  type ProviderHealthRecord,
-  loadProviderHealthRecords,
-  saveProviderHealthRecords,
-} from "../lib/providerHealthStore";
+import { DEFAULT_PROVIDER_DRAFT } from "../lib/providerDrafts";
 import { loadProviderState, saveProviders } from "../lib/providerStore";
-
-type ProviderStatusTone = "neutral" | "success" | "warning" | "error";
-
-type ProviderStatus = {
-  tone: ProviderStatusTone;
-  message: string;
-};
-
-type UseProviderManagementOptions = {
-  browserPreviewMessage: string;
-  isTauriRuntime: boolean;
-  openProviderSettings: () => void;
-  toneForProviderError: (error: ProviderCommandError) => ProviderStatusTone;
-};
+import { createProviderPresetActions } from "./providerManagement/providerPresetActions";
+import type {
+  ProviderStatus,
+  UseProviderManagementOptions,
+} from "./providerManagement/types";
+import { useLegacyProviderMigration } from "./providerManagement/useLegacyProviderMigration";
+import { useProviderHealthRecords } from "./providerManagement/useProviderHealthRecords";
+import { useProviderSelection } from "./providerManagement/useProviderSelection";
 
 export function useProviderManagement({
   browserPreviewMessage,
@@ -54,9 +33,6 @@ export function useProviderManagement({
   toneForProviderError,
 }: UseProviderManagementOptions) {
   const [initialProviderState] = useState(() => loadProviderState());
-  const [providerHealthRecords, setProviderHealthRecords] = useState<
-    Record<string, ProviderHealthRecord>
-  >(() => loadProviderHealthRecords());
   const [isTestingProvider, setIsTestingProvider] = useState(false);
   const [isSavingProvider, setIsSavingProvider] = useState(false);
   const [isMigratingProviders, setIsMigratingProviders] = useState(
@@ -65,20 +41,20 @@ export function useProviderManagement({
   const [removingProviderId, setRemovingProviderId] = useState("");
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>(initialProviderState.providers);
-  const [selectedProviderId, setSelectedProviderId] = useState("");
-  const [editingProviderId, setEditingProviderId] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>({
     ...DEFAULT_PROVIDER_DRAFT,
   });
 
-  const selectedProvider = useMemo(
-    () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
-    [providers, selectedProviderId],
-  );
-  const editingProvider = useMemo(
-    () => providers.find((provider) => provider.id === editingProviderId) ?? null,
-    [providers, editingProviderId],
-  );
+  const { providerHealthRecords, updateProviderHealthRecord, removeProviderHealthRecord } =
+    useProviderHealthRecords();
+  const {
+    selectedProvider,
+    selectedProviderId,
+    setSelectedProviderId,
+    editingProvider,
+    editingProviderId,
+    setEditingProviderId,
+  } = useProviderSelection(providers);
   const selectedProviderHealth = selectedProvider
     ? providerHealthRecords[selectedProvider.id] ?? null
     : null;
@@ -97,182 +73,18 @@ export function useProviderManagement({
     saveProviders(next);
   }
 
-  function updateProviderHealthRecord(record: ProviderHealthRecord) {
-    setProviderHealthRecords((current) => {
-      const next = {
-        ...current,
-        [record.providerId]: record,
-      };
-      saveProviderHealthRecords(next);
-      return next;
-    });
-  }
-
-  function removeProviderHealthRecord(providerId: string) {
-    setProviderHealthRecords((current) => {
-      const next = { ...current };
-      delete next[providerId];
-      saveProviderHealthRecords(next);
-      return next;
-    });
-  }
-
-  useEffect(() => {
-    if (!selectedProviderId && providers.length > 0) {
-      setSelectedProviderId(providers[0].id);
-      return;
-    }
-
-    if (
-      selectedProviderId &&
-      providers.length > 0 &&
-      !providers.some((provider) => provider.id === selectedProviderId)
-    ) {
-      setSelectedProviderId(providers[0].id);
-    }
-  }, [providers, selectedProviderId]);
-
-  useEffect(() => {
-    if (!isTauriRuntime) {
-      setProviderStatus({
-        tone: "warning",
-        message: browserPreviewMessage,
-      });
-      setIsMigratingProviders(false);
-      return;
-    }
-
-    if (initialProviderState.legacyProviders.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function rollbackSecrets(providerIds: string[]) {
-      await Promise.allSettled(providerIds.map((providerId) => deleteProviderSecret(providerId)));
-    }
-
-    async function migrateLegacyProviders() {
-      setProviderStatus({
-        tone: "neutral",
-        message: `Migrating ${initialProviderState.legacyProviders.length} existing provider secret(s) into the OS credential store...`,
-      });
-
-      const migratedProviders: ProviderConfig[] = [];
-      const storedProviderIds: string[] = [];
-
-      for (const provider of initialProviderState.legacyProviders) {
-        const result = await storeProviderSecret(provider.id, provider.apiKey);
-        if (result.status === "error") {
-          await rollbackSecrets(storedProviderIds);
-          if (!cancelled) {
-            setProviderStatus({
-              tone: toneForProviderError(result.error),
-              message:
-                "Legacy provider migration failed. Browser-stored providers were left unchanged. Resolve credential-store access and restart PilotBell.",
-            });
-            setIsMigratingProviders(false);
-          }
-          return;
-        }
-
-        storedProviderIds.push(provider.id);
-        migratedProviders.push({
-          id: provider.id,
-          kind: provider.kind ?? DEFAULT_PROVIDER_KIND,
-          name: provider.name,
-          endpoint: provider.endpoint,
-          model: provider.model,
-          hasSecret: true,
-          advancedEndpoint: provider.advancedEndpoint ?? false,
-        });
-      }
-
-      if (cancelled) {
-        await rollbackSecrets(storedProviderIds);
-        return;
-      }
-
-      setProviders((current) => {
-        const next = [...current, ...migratedProviders];
-        saveProviders(next);
-        return next;
-      });
-      setProviderStatus({
-        tone: "success",
-        message: `Migrated ${migratedProviders.length} provider secret(s) into the OS credential store.`,
-      });
-      setIsMigratingProviders(false);
-    }
-
-    void migrateLegacyProviders();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
+  useLegacyProviderMigration({
     browserPreviewMessage,
-    initialProviderState.legacyProviders,
     isTauriRuntime,
+    legacyProviders: initialProviderState.legacyProviders,
+    setIsMigratingProviders,
+    setProviderStatus,
+    setProviders,
     toneForProviderError,
-  ]);
+  });
 
-  function applyOpenAIPreset() {
-    setProviderDraft((current) => ({
-      ...current,
-      ...DEFAULT_PROVIDER_DRAFT,
-      name:
-        current.name.trim() && current.kind === DEFAULT_PROVIDER_KIND
-          ? current.name
-          : DEFAULT_PROVIDER_DRAFT.name,
-      model:
-        current.model.trim() && current.kind === DEFAULT_PROVIDER_KIND
-          ? current.model
-          : DEFAULT_PROVIDER_DRAFT.model,
-    }));
-  }
-
-  function applyAnthropicPreset() {
-    setProviderDraft((current) => ({
-      ...current,
-      ...ANTHROPIC_PROVIDER_DRAFT,
-      name:
-        current.name.trim() && current.kind === ANTHROPIC_PROVIDER_KIND
-          ? current.name
-          : ANTHROPIC_PROVIDER_DRAFT.name,
-      model:
-        current.model.trim() && current.kind === ANTHROPIC_PROVIDER_KIND
-          ? current.model
-          : ANTHROPIC_PROVIDER_DRAFT.model,
-    }));
-  }
-
-  function applyOllamaPreset() {
-    setProviderDraft((current) => ({
-      ...current,
-      ...OLLAMA_PROVIDER_DRAFT,
-      name: current.name.trim() && current.kind === OLLAMA_PROVIDER_KIND ? current.name : "Ollama",
-      model:
-        current.model.trim() && current.kind === OLLAMA_PROVIDER_KIND
-          ? current.model
-          : OLLAMA_PROVIDER_DRAFT.model,
-    }));
-  }
-
-  function applyLlamaCppPreset() {
-    setProviderDraft((current) => ({
-      ...current,
-      ...LLAMA_CPP_PROVIDER_DRAFT,
-      name:
-        current.name.trim() && current.kind === LLAMA_CPP_PROVIDER_KIND
-          ? current.name
-          : LLAMA_CPP_PROVIDER_DRAFT.name,
-      model:
-        current.model.trim() && current.kind === LLAMA_CPP_PROVIDER_KIND
-          ? current.model
-          : LLAMA_CPP_PROVIDER_DRAFT.model,
-    }));
-  }
+  const { applyOpenAIPreset, applyAnthropicPreset, applyOllamaPreset, applyLlamaCppPreset } =
+    createProviderPresetActions(setProviderDraft);
 
   function resetProviderDraft() {
     setEditingProviderId("");
