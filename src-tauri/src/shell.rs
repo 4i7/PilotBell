@@ -105,10 +105,12 @@ pub(crate) fn open_settings_window(app: AppHandle, section: Option<String>) -> R
         return Ok(());
     }
 
+    // Keep the secondary window state in the fragment so the app shell asset path stays
+    // `index.html` in packaged builds while React can still choose the settings view.
     WebviewWindowBuilder::new(
         &app,
         "settings",
-        WebviewUrl::App(format!("index.html?view=settings&section={section}").into()),
+        WebviewUrl::App(format!("index.html#view=settings&section={section}").into()),
     )
     .title("PilotBell Settings")
     .inner_size(760.0, 820.0)

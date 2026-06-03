@@ -2829,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "pilotbell"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "calamine",
  "docx-rs",
