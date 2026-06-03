@@ -27,14 +27,16 @@ The app focuses on local document workflows: PDF structure inspection, Excel dat
 - [x] Add lightweight document job metadata persistence only
 - [x] Add provider endpoint advanced-mode warnings
 - [x] Add credential-store diagnosis, repair, re-save, and delete UI
+- [x] Add review-before-send gates for cloud and advanced endpoint sends
+- [x] Add private mode and minimize persisted document metadata
+- [x] Add pull-request CI for frontend and Rust verification
 
 ## Next Slices
 
-- Add richer context preview before LLM-assisted report drafting.
 - Add more document templates and template-specific DOCX styling.
 - Improve PDF extraction quality while preserving temporary processing boundaries.
 - Add focused frontend component extraction around provider settings and prompt/session surfaces.
-- Add end-to-end UI verification for document progress, cancellation, and provider warning flows.
+- Add UI-level coverage for migration scrub, private mode, and send-review flows.
 
 ## Explicit Non-Goals
 
@@ -48,6 +50,7 @@ The app focuses on local document workflows: PDF structure inspection, Excel dat
 ## Validation Baseline
 
 - `npm run build`
+- `npm run test`
 - `cargo fmt --manifest-path src-tauri/Cargo.toml --check`
 - `cargo check --manifest-path src-tauri/Cargo.toml`
 - `cargo test --manifest-path src-tauri/Cargo.toml`
@@ -61,3 +64,4 @@ The app focuses on local document workflows: PDF structure inspection, Excel dat
 - The supported Rust toolchain is `stable-msvc`.
 - Document contents are untrusted input.
 - Extracted document text, chunks, and LLM context are temporary workflow data and are not stored in browser storage.
+- Input paths, output paths, and provider identifiers are not persisted in browser storage.

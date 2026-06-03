@@ -16,4 +16,5 @@ export type UseProviderManagementOptions = {
   isTauriRuntime: boolean;
   openProviderSettings: () => void;
   toneForProviderError: (error: ProviderCommandError) => ProviderStatusTone;
+  onLegacySecretsScrubbed?: () => void;
 };

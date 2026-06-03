@@ -118,7 +118,7 @@ function App() {
 
   const isTauriRuntime = useMemo(() => hasTauriRuntime(), []);
   const isSettingsWindow = useMemo(() => isSettingsWindowView(), []);
-  const documentJobs = useDocumentJobs(isTauriRuntime);
+  const documentJobs = useDocumentJobs(isTauriRuntime, inputPreferences.documentPrivateMode);
   const {
     providers,
     providerDraft,
@@ -155,6 +155,9 @@ function App() {
     browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
     isTauriRuntime,
     openProviderSettings: () => openSettings("providers"),
+    onLegacySecretsScrubbed: () => {
+      persistSessionEntries([]);
+    },
     toneForProviderError,
   });
   const { themePreference, resolvedTheme, persistThemePreference } = useThemePreference();
@@ -538,6 +541,13 @@ function App() {
                 statusMessage={documentJobs.statusMessage}
                 isRunning={documentJobs.isRunning}
                 isTauriRuntime={isTauriRuntime}
+                privateMode={inputPreferences.documentPrivateMode}
+                setPrivateMode={(value) =>
+                  updateInputPreferences((current) => ({
+                    ...current,
+                    documentPrivateMode: value,
+                  }))
+                }
                 onStart={() => void documentJobs.startJob()}
                 onCancel={() => void documentJobs.cancelActiveJob()}
                 onClear={documentJobs.clearJobs}

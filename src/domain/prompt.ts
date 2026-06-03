@@ -23,6 +23,7 @@ export type PromptContextPreview = {
   preparedPrompt: string;
   providerLabel: string;
   providerEndpoint: string;
+  providerHost: string;
   providerRisk: {
     tone: "neutral" | "warning";
     summary: string;
@@ -31,4 +32,8 @@ export type PromptContextPreview = {
   warnings: string[];
   estimatedChars: number;
   requiresCloudReview: boolean;
+  requiresReview: boolean;
+  requiresExplicitOptIn: boolean;
+  secretWillBeUsed: boolean;
+  reviewReason: string;
 };

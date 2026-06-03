@@ -3,6 +3,10 @@ import { type DocumentFailureKind, type DocumentJobMetadata } from "../domain/do
 const STORAGE_KEY = "pilotbell.documentJobs";
 const MAX_DOCUMENT_JOBS = 30;
 
+type SaveDocumentJobsOptions = {
+  privateMode?: boolean;
+};
+
 function normalizeDocumentJobMetadata(value: unknown): DocumentJobMetadata | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -12,8 +16,6 @@ function normalizeDocumentJobMetadata(value: unknown): DocumentJobMetadata | nul
   if (
     typeof item.jobId !== "string" ||
     typeof item.fileName !== "string" ||
-    typeof item.filePath !== "string" ||
-    typeof item.outputPath !== "string" ||
     typeof item.timestamp !== "string" ||
     typeof item.status !== "string" ||
     typeof item.selectedTemplate !== "string"
@@ -24,8 +26,8 @@ function normalizeDocumentJobMetadata(value: unknown): DocumentJobMetadata | nul
   return {
     jobId: item.jobId,
     fileName: item.fileName,
-    filePath: item.filePath,
-    outputPath: item.outputPath,
+    filePath: typeof item.filePath === "string" ? item.filePath : null,
+    outputPath: typeof item.outputPath === "string" ? item.outputPath : null,
     timestamp: item.timestamp,
     status: item.status,
     selectedTemplate: item.selectedTemplate,
@@ -72,8 +74,35 @@ export function loadDocumentJobs(): DocumentJobMetadata[] {
   }
 }
 
-export function saveDocumentJobs(jobs: DocumentJobMetadata[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs.slice(0, MAX_DOCUMENT_JOBS)));
+function sanitizeJobForPersistence(job: DocumentJobMetadata): DocumentJobMetadata {
+  return {
+    jobId: job.jobId,
+    fileName: job.fileName,
+    filePath: null,
+    outputPath: null,
+    timestamp: job.timestamp,
+    status: job.status,
+    selectedTemplate: job.selectedTemplate,
+    providerId: null,
+    errorSummary: job.errorSummary ?? null,
+    warnings: job.warnings ?? [],
+    failureKind: job.failureKind ?? null,
+  };
+}
+
+export function saveDocumentJobs(
+  jobs: DocumentJobMetadata[],
+  options: SaveDocumentJobsOptions = {},
+) {
+  if (options.privateMode) {
+    localStorage.removeItem(STORAGE_KEY);
+    return;
+  }
+
+  const sanitized = jobs
+    .slice(0, MAX_DOCUMENT_JOBS)
+    .map(sanitizeJobForPersistence);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
 }
 
 export function clearDeprecatedLocalSourceIndex() {

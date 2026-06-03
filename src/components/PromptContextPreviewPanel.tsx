@@ -32,8 +32,12 @@ export function PromptContextPreviewPanel({
         <div className="context-preview-card">
           <div className="section-title">Provider</div>
           <p className="context-preview-meta">{preview.providerLabel}</p>
+          <p className="context-preview-meta">Destination host: {preview.providerHost}</p>
           <p className="context-preview-meta">{preview.providerEndpoint}</p>
           <p className="context-preview-risk">{preview.providerRisk.summary}</p>
+          <p className="context-preview-meta">
+            Stored API key used: {preview.secretWillBeUsed ? "Yes" : "No"}
+          </p>
           <p className="context-preview-meta">
             Estimated prompt size: {preview.estimatedChars.toLocaleString()} characters
           </p>
@@ -81,6 +85,13 @@ export function PromptContextPreviewPanel({
         </div>
       ) : null}
 
+      <div className={preview.requiresExplicitOptIn ? "notice notice-warning" : "notice notice-neutral"}>
+        <div>
+          <strong>{preview.requiresExplicitOptIn ? "Explicit opt-in required" : "Review required"}</strong>
+          <p>{preview.reviewReason}</p>
+        </div>
+      </div>
+
       <div className="context-preview-card">
         <div className="section-title">Final prompt body</div>
         <pre className="context-preview-body">{preview.preparedPrompt}</pre>
@@ -88,7 +99,7 @@ export function PromptContextPreviewPanel({
 
       <div className="settings-actions">
         <button type="button" className="button-save" onClick={onApprove}>
-          Send reviewed context
+          {preview.requiresExplicitOptIn ? "I understand, send anyway" : "Send reviewed prompt"}
         </button>
         <button type="button" className="secondary" onClick={onCancel}>
           Cancel review
