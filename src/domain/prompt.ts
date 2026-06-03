@@ -35,5 +35,6 @@ export type PromptContextPreview = {
   requiresReview: boolean;
   requiresExplicitOptIn: boolean;
   secretWillBeUsed: boolean;
+  storedSecretAvailable: boolean;
   reviewReason: string;
 };

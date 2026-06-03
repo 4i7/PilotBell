@@ -112,6 +112,8 @@ export function buildPromptContextPreview(
     requiresReview,
     requiresExplicitOptIn,
     secretWillBeUsed: providerRequiresApiKey(provider.kind),
+    storedSecretAvailable:
+      providerRequiresApiKey(provider.kind) && provider.hasSecret,
     reviewReason,
   };
 }
