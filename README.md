@@ -1,5 +1,7 @@
 # PilotBell
 
+[![CI](https://github.com/4i7/PilotBell/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/4i7/PilotBell/actions/workflows/ci.yml)
+
 PilotBell is a Rust + Tauri desktop tool for fast local document processing with optional LLM assistance.
 
 The product direction is narrow by design: selected PDFs and Excel workbooks are processed in Rust, converted into reviewable Markdown and sanitized SVG, and exported as DOCX reports. LLM providers assist with draft wording and report shaping only after the user reviews what local document context may be sent.
