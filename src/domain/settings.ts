@@ -4,21 +4,27 @@ export function isSettingsSection(value: unknown): value is SettingsSection {
   return value === "providers" || value === "documents" || value === "sources";
 }
 
-export function getInitialSettingsSection(): SettingsSection {
+function getSettingsWindowParams() {
   if (typeof window === "undefined") {
-    return "providers";
+    return new URLSearchParams();
   }
 
-  const section = new URLSearchParams(window.location.search).get("section");
+  const queryParams = new URLSearchParams(window.location.search);
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+
+  return new URLSearchParams([...queryParams, ...hashParams]);
+}
+
+export function getInitialSettingsSection(): SettingsSection {
+  const section = getSettingsWindowParams().get("section");
   return isSettingsSection(section) ? section : "providers";
 }
 
 export function isSettingsWindowView() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return new URLSearchParams(window.location.search).get("view") === "settings";
+  return getSettingsWindowParams().get("view") === "settings";
 }
 
 export function hasTauriRuntime() {
