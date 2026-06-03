@@ -22,6 +22,7 @@ export function useProviderManagement({
   browserPreviewMessage,
   isTauriRuntime,
   openProviderSettings,
+  onLegacySecretsScrubbed,
   toneForProviderError,
 }: UseProviderManagementOptions) {
   const [initialProviderState] = useState(() => loadProviderState());
@@ -59,6 +60,7 @@ export function useProviderManagement({
     browserPreviewMessage,
     isTauriRuntime,
     legacyProviders: initialProviderState.legacyProviders,
+    onLegacySecretsScrubbed,
     setIsMigratingProviders,
     setProviderStatus,
     setProviders,

@@ -24,11 +24,10 @@ const DEFAULT_DRAFT: DocumentJobDraft = {
   inputPath: "",
   outputDir: "",
   selectedTemplate: DEFAULT_DOCUMENT_TEMPLATE,
-  providerId: "",
   overwrite: false,
 };
 
-export function useDocumentJobs(isTauriRuntime: boolean) {
+export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
   const [draft, setDraft] = useState<DocumentJobDraft>({ ...DEFAULT_DRAFT });
   const [jobs, setJobs] = useState<DocumentJobMetadata[]>(() => loadDocumentJobs());
   const [progress, setProgress] = useState<Record<string, DocumentJobProgress>>({});
@@ -39,6 +38,10 @@ export function useDocumentJobs(isTauriRuntime: boolean) {
   useEffect(() => {
     clearDeprecatedLocalSourceIndex();
   }, []);
+
+  useEffect(() => {
+    saveDocumentJobs(jobs, { privateMode });
+  }, [jobs, privateMode]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -69,7 +72,7 @@ export function useDocumentJobs(isTauriRuntime: boolean) {
 
   function persistJobs(next: DocumentJobMetadata[]) {
     setJobs(next);
-    saveDocumentJobs(next);
+    saveDocumentJobs(next, { privateMode });
   }
 
   async function startJob() {
@@ -95,7 +98,6 @@ export function useDocumentJobs(isTauriRuntime: boolean) {
           inputPath: draft.inputPath.trim(),
           outputDir: draft.outputDir.trim(),
           selectedTemplate: draft.selectedTemplate.trim(),
-          providerId: draft.providerId.trim() || null,
           overwrite: draft.overwrite,
         },
       });
@@ -121,7 +123,6 @@ export function useDocumentJobs(isTauriRuntime: boolean) {
         timestamp: new Date().toISOString(),
         status: "failed",
         selectedTemplate: draft.selectedTemplate.trim(),
-        providerId: draft.providerId.trim() || null,
         errorSummary,
         warnings: [],
         failureKind,

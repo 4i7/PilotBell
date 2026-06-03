@@ -11,6 +11,8 @@ type DocumentWorkflowPanelProps = {
   statusMessage: string;
   isRunning: boolean;
   isTauriRuntime: boolean;
+  privateMode: boolean;
+  setPrivateMode: (value: boolean) => void;
   onStart: () => void;
   onCancel: () => void;
   onClear: () => void;
@@ -24,6 +26,8 @@ export function DocumentWorkflowPanel({
   statusMessage,
   isRunning,
   isTauriRuntime,
+  privateMode,
+  setPrivateMode,
   onStart,
   onCancel,
   onClear,
@@ -77,6 +81,11 @@ export function DocumentWorkflowPanel({
         runs locally in Rust, and provider selection is intentionally disabled until that changes.
       </div>
 
+      <div className="notice notice-neutral">
+        Persistent document metadata is minimized. PilotBell does not persist input paths, output
+        paths, or provider identifiers in browser storage.
+      </div>
+
       <div className="settings-grid">
         <input
           value={draft.inputPath}
@@ -119,6 +128,14 @@ export function DocumentWorkflowPanel({
         />
         Allow overwrite when output files already exist
       </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={privateMode}
+          onChange={(event) => setPrivateMode(event.currentTarget.checked)}
+        />
+        Private mode: do not persist document job metadata between launches
+      </label>
 
       <div className="settings-actions">
         <button
@@ -160,7 +177,7 @@ export function DocumentWorkflowPanel({
                   <span className="capability">{job.status}</span>
                   <span className="status">{job.fileName}</span>
                 </div>
-                <p className="source-path">{job.outputPath}</p>
+                {job.outputPath ? <p className="source-path">{job.outputPath}</p> : null}
                 {job.errorSummary ? <p className="source-notes">{job.errorSummary}</p> : null}
                 {job.failureKind ? (
                   <p className="source-notes">{documentFailureGuidance(job.failureKind)}</p>

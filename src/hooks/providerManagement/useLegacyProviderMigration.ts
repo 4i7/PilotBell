@@ -6,12 +6,18 @@ import {
   type ProviderConfig,
 } from "../../domain/provider";
 import { deleteProviderSecret, storeProviderSecret } from "../../lib/providerCommands";
-import { saveProviders } from "../../lib/providerStore";
+import {
+  replaceLegacyProvidersWithMetadata,
+  saveProviders,
+} from "../../lib/providerStore";
 import type { ProviderStatus, SetProviderStatus, UseProviderManagementOptions } from "./types";
 
 type UseLegacyProviderMigrationOptions = Pick<
   UseProviderManagementOptions,
-  "browserPreviewMessage" | "isTauriRuntime" | "toneForProviderError"
+  | "browserPreviewMessage"
+  | "isTauriRuntime"
+  | "onLegacySecretsScrubbed"
+  | "toneForProviderError"
 > & {
   legacyProviders: LegacyProviderConfig[];
   setIsMigratingProviders: Dispatch<SetStateAction<boolean>>;
@@ -34,13 +40,32 @@ export function useLegacyProviderMigration({
   browserPreviewMessage,
   isTauriRuntime,
   legacyProviders,
+  onLegacySecretsScrubbed,
   setIsMigratingProviders,
   setProviderStatus,
   setProviders,
   toneForProviderError,
 }: UseLegacyProviderMigrationOptions) {
   useEffect(() => {
+    function scrubLegacyProviders(message: string, tone: ProviderStatus["tone"]) {
+      const sanitizedProviders = replaceLegacyProvidersWithMetadata(legacyProviders);
+      setProviders(sanitizedProviders);
+      onLegacySecretsScrubbed?.();
+      setProviderStatus({
+        tone,
+        message,
+      });
+      setIsMigratingProviders(false);
+    }
+
     if (!isTauriRuntime) {
+      if (legacyProviders.length > 0) {
+        scrubLegacyProviders(
+          "Legacy browser-stored API keys were removed because secure migration requires the Tauri desktop runtime. Re-save each provider API key from settings.",
+          "warning",
+        );
+        return;
+      }
       setProviderStatus({
         tone: "warning",
         message: browserPreviewMessage,
@@ -66,12 +91,10 @@ export function useLegacyProviderMigration({
         if (result.status === "error") {
           await rollbackSecrets(storedProviderIds);
           if (!cancelled) {
-            setProviderStatus({
-              tone: toneForProviderError(result.error),
-              message:
-                "Legacy provider migration failed. Browser-stored providers were left unchanged. Resolve credential-store access and restart PilotBell.",
-            });
-            setIsMigratingProviders(false);
+            scrubLegacyProviders(
+              "Legacy provider migration failed. Browser-stored API keys were removed instead of being left behind. Resolve credential-store access, then re-save each provider API key.",
+              toneForProviderError(result.error),
+            );
           }
           return;
         }
@@ -114,6 +137,7 @@ export function useLegacyProviderMigration({
     browserPreviewMessage,
     isTauriRuntime,
     legacyProviders,
+    onLegacySecretsScrubbed,
     setIsMigratingProviders,
     setProviderStatus,
     setProviders,

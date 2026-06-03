@@ -11,6 +11,9 @@ export type PromptInputPreferences = {
   focusAfterSubmit: boolean;
   allowSubmitWhileSending: boolean;
   autoResize: boolean;
+  reviewCloudBeforeSend: boolean;
+  reviewAdvancedEndpointsBeforeSend: boolean;
+  documentPrivateMode: boolean;
 };
 
 export const DEFAULT_PROMPT_INPUT_PREFERENCES: PromptInputPreferences = {
@@ -19,6 +22,9 @@ export const DEFAULT_PROMPT_INPUT_PREFERENCES: PromptInputPreferences = {
   focusAfterSubmit: true,
   allowSubmitWhileSending: false,
   autoResize: true,
+  reviewCloudBeforeSend: true,
+  reviewAdvancedEndpointsBeforeSend: true,
+  documentPrivateMode: false,
 };
 
 function isSubmitShortcutMode(value: unknown): value is SubmitShortcutMode {
@@ -60,5 +66,17 @@ export function normalizePromptInputPreferences(
       typeof item.autoResize === "boolean"
         ? item.autoResize
         : DEFAULT_PROMPT_INPUT_PREFERENCES.autoResize,
+    reviewCloudBeforeSend:
+      typeof item.reviewCloudBeforeSend === "boolean"
+        ? item.reviewCloudBeforeSend
+        : DEFAULT_PROMPT_INPUT_PREFERENCES.reviewCloudBeforeSend,
+    reviewAdvancedEndpointsBeforeSend:
+      typeof item.reviewAdvancedEndpointsBeforeSend === "boolean"
+        ? item.reviewAdvancedEndpointsBeforeSend
+        : DEFAULT_PROMPT_INPUT_PREFERENCES.reviewAdvancedEndpointsBeforeSend,
+    documentPrivateMode:
+      typeof item.documentPrivateMode === "boolean"
+        ? item.documentPrivateMode
+        : DEFAULT_PROMPT_INPUT_PREFERENCES.documentPrivateMode,
   };
 }

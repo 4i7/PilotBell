@@ -50,6 +50,21 @@ function makeSessionEntryId() {
   return `session-${crypto.randomUUID()}`;
 }
 
+function shouldGatePromptSend(
+  preview: PromptContextPreview,
+  options: PromptInputPreferences,
+) {
+  if (preview.requiresExplicitOptIn && options.reviewAdvancedEndpointsBeforeSend) {
+    return true;
+  }
+
+  if (preview.requiresCloudReview && options.reviewCloudBeforeSend) {
+    return true;
+  }
+
+  return preview.attachments.length > 0;
+}
+
 export function usePromptSending({
   attachedFiles,
   browserPreviewMessage,
@@ -197,8 +212,8 @@ export function usePromptSending({
       return;
     }
 
-    if (attachedFiles.length > 0) {
-      const preview = buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
+    const preview = buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
+    if (shouldGatePromptSend(preview, options)) {
       setPendingReview({
         preview,
         prompt: targetPrompt,
@@ -207,10 +222,8 @@ export function usePromptSending({
         clearPromptOnSuccess: promptOverride === undefined,
       });
       setChatStatus({
-        tone: preview.requiresCloudReview ? "warning" : "neutral",
-        message: preview.requiresCloudReview
-          ? "Review the exact attachment context before sending it to the selected cloud provider."
-          : "Review the exact attachment context before sending it to the selected local provider.",
+        tone: preview.requiresExplicitOptIn || preview.requiresCloudReview ? "warning" : "neutral",
+        message: preview.reviewReason,
       });
       return;
     }

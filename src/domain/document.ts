@@ -32,8 +32,8 @@ export type DocumentJobProgress = {
 export type DocumentJobMetadata = {
   jobId: string;
   fileName: string;
-  filePath: string;
-  outputPath: string;
+  filePath?: string | null;
+  outputPath?: string | null;
   timestamp: string;
   status: string;
   selectedTemplate: string;
@@ -64,7 +64,6 @@ export type DocumentJobDraft = {
   inputPath: string;
   outputDir: string;
   selectedTemplate: string;
-  providerId: string;
   overwrite: boolean;
 };
 

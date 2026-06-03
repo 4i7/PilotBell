@@ -12,6 +12,8 @@ type LoadedProviderState = {
   legacyProviders: LegacyProviderConfig[];
 };
 
+export const PROVIDER_STORAGE_KEY = STORAGE_KEY;
+
 function normalizeProviderMetadata(value: unknown): ProviderConfig | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -65,6 +67,28 @@ function normalizeLegacyProvider(value: unknown): LegacyProviderConfig | null {
     hasSecret: typeof item.hasSecret === "boolean" ? item.hasSecret : undefined,
     advancedEndpoint: typeof item.advancedEndpoint === "boolean" ? item.advancedEndpoint : undefined,
   };
+}
+
+export function sanitizeLegacyProvidersToMetadata(
+  legacyProviders: LegacyProviderConfig[],
+): ProviderConfig[] {
+  return legacyProviders.map((provider) => ({
+    id: provider.id,
+    kind: provider.kind ?? DEFAULT_PROVIDER_KIND,
+    name: provider.name,
+    endpoint: provider.endpoint,
+    model: provider.model,
+    hasSecret: false,
+    advancedEndpoint: provider.advancedEndpoint ?? false,
+  }));
+}
+
+export function replaceLegacyProvidersWithMetadata(
+  legacyProviders: LegacyProviderConfig[],
+): ProviderConfig[] {
+  const sanitizedProviders = sanitizeLegacyProvidersToMetadata(legacyProviders);
+  saveProviders(sanitizedProviders);
+  return sanitizedProviders;
 }
 
 export function loadProviderState(): LoadedProviderState {

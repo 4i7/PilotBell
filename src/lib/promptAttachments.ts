@@ -1,5 +1,6 @@
 import {
   classifyProviderEndpoint,
+  providerRequiresApiKey,
   providerIsCloud,
   type ProviderConfig,
 } from "../domain/provider";
@@ -63,6 +64,13 @@ export function buildPromptContextPreview(
   const { preparedPrompt } = buildPromptWithAttachments(prompt, files);
   const attachments = files.map(describeAttachment);
   const endpointRisk = classifyProviderEndpoint(provider.kind, provider.endpoint);
+  const providerHost = (() => {
+    try {
+      return new URL(provider.endpoint).host;
+    } catch {
+      return provider.endpoint;
+    }
+  })();
   const warnings = attachments
     .flatMap((file) => {
       const nextWarnings = [];
@@ -75,11 +83,22 @@ export function buildPromptContextPreview(
       return nextWarnings;
     })
     .filter((warning, index, values) => values.indexOf(warning) === index);
+  const requiresCloudReview = providerIsCloud(provider.kind);
+  const requiresExplicitOptIn = endpointRisk.isAdvanced;
+  const requiresReview = requiresCloudReview || requiresExplicitOptIn || attachments.length > 0;
+  const reviewReason = requiresExplicitOptIn
+    ? "Advanced endpoint opt-in is required before this send."
+    : requiresCloudReview
+      ? "Cloud-bound sends require review before PilotBell transmits the prompt."
+      : attachments.length > 0
+        ? "Attachment context is queued for this send."
+        : "Review this send before continuing.";
 
   return {
     preparedPrompt,
     providerLabel: `${provider.name} / ${provider.model || "model not set"}`,
     providerEndpoint: provider.endpoint,
+    providerHost,
     providerRisk: {
       tone: endpointRisk.tone,
       summary: providerIsCloud(provider.kind)
@@ -89,7 +108,11 @@ export function buildPromptContextPreview(
     attachments,
     warnings,
     estimatedChars: preparedPrompt.length,
-    requiresCloudReview: providerIsCloud(provider.kind),
+    requiresCloudReview,
+    requiresReview,
+    requiresExplicitOptIn,
+    secretWillBeUsed: providerRequiresApiKey(provider.kind),
+    reviewReason,
   };
 }
 

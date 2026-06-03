@@ -4,6 +4,16 @@ PilotBell is a Rust + Tauri desktop tool for fast local document processing with
 
 The product direction is narrow by design: selected PDFs and Excel workbooks are processed in Rust, converted into reviewable Markdown and sanitized SVG, and exported as DOCX reports. LLM providers assist with draft wording and report shaping only after the user reviews what local document context may be sent.
 
+## Why This Matters
+
+Most desktop AI tooling is optimized either for cloud-first chat or for broad agent frameworks. PilotBell is aimed at a different gap: local document workflows where users need faster extraction and drafting help without giving up control over files, intermediate context, provider routing, or output formats.
+
+That makes the project useful as OSS in three ways:
+
+- It is a concrete reference for privacy-conscious desktop AI workflows on Windows with Rust + Tauri.
+- It shows how to combine local document processing, explicit context review, and optional hosted/local model providers without turning the app into a general-purpose agent shell.
+- It creates a testable surface for contributors who care about safer endpoint handling, better extraction quality, and repeatable report generation for real document-heavy work.
+
 ## Download
 
 Windows installer builds are published from GitHub Releases. Download the latest `PilotBell_*_x64-setup.exe` asset from the release page and run it as the current user.
@@ -16,11 +26,12 @@ Windows installer builds are published from GitHub Releases. Download the latest
 - OpenAI Responses and Anthropic Messages adapters for official hosted HTTPS endpoints
 - Ollama and llama.cpp adapters for local loopback HTTP endpoints
 - Advanced endpoint mode with warnings for hosted custom URLs, LAN URLs, and external URLs
+- Review-before-send gates for cloud providers and explicit opt-in for advanced endpoints
 - Credential-store diagnosis, repair, re-save, and delete actions
 - Rust document workflow for selected PDF and Excel files
 - Tauri progress events for long-running document processing
 - Reviewable Markdown IR, sanitized SVG summary, and DOCX report output
-- Lightweight document job metadata persistence
+- Minimized document job metadata persistence, with optional private mode
 
 ## Non-Goals
 
@@ -56,15 +67,16 @@ Allowed browser storage is limited to lightweight metadata:
 
 - `jobId`
 - `fileName`
-- `filePath`
-- `outputPath`
 - `timestamp`
 - `status`
 - `selectedTemplate`
-- `providerId`
 - `errorSummary`
+- `warnings`
+- `failureKind`
 
-PilotBell does not persist PDF body text, Excel cell contents, Word body text, extracted text, chunks, LLM context, or other sensitive intermediate document data in localStorage. Legacy `pilotbell.localSourceIndex` snapshots are cleared on startup.
+PilotBell does not persist PDF body text, Excel cell contents, Word body text, extracted text, chunks, LLM context, input paths, output paths, or provider identifiers in localStorage. Legacy `pilotbell.localSourceIndex` snapshots are cleared on startup, and legacy browser-stored provider API keys are scrubbed into metadata-only provider records.
+
+When private mode is enabled, document job metadata is not persisted at all between launches.
 
 ## Provider Safety
 
@@ -74,12 +86,14 @@ PilotBell does not persist PDF body text, Excel cell contents, Word body text, e
 - LAN and external local-provider URLs require advanced endpoint mode and show a warning.
 - Provider tests report missing credential-store secrets clearly.
 - Secret values are never shown in UI errors or logs.
+- Cloud-bound sends require pre-send review.
+- Advanced endpoints require an explicit pre-send opt-in.
 - Model availability depends on the selected provider account. If provider testing fails, choose a model available to that API key.
 
-When local document excerpts may be sent to a cloud provider, PilotBell warns before submission:
+When a prompt is sent through a cloud provider, or through an advanced custom endpoint, PilotBell stops on a review step before submission:
 
 ```text
-Local document excerpts may be included in prompts sent to the selected provider. Review the context before sending sensitive data.
+Review the destination host, risk level, stored-secret usage, and final prompt body before sending sensitive data.
 ```
 
 ## Setup
@@ -87,7 +101,7 @@ Local document excerpts may be included in prompts sent to the selected provider
 ```powershell
 git clone https://github.com/4i7/PilotBell.git
 cd PilotBell
-npm install
+npm ci
 ```
 
 Run the desktop app in development mode:
@@ -100,6 +114,12 @@ Build the web frontend only:
 
 ```powershell
 npm run build
+```
+
+Run the frontend unit tests:
+
+```powershell
+npm run test
 ```
 
 Build a desktop bundle:
@@ -128,6 +148,7 @@ For the current desktop validation path, use a Windows host with `stable-msvc`.
 - `src/domain/provider.ts` - provider types, endpoint classification, and normalization
 - `src/lib/documentJobStore.ts` - lightweight document job metadata persistence
 - `src/lib/providerStore.ts` - provider metadata persistence helpers
+- `src/lib/promptAttachments.ts` - prompt review payload construction and review gating
 - `src/components/DocumentWorkflowPanel.tsx` - document workflow controls
 - `src/hooks/useDocumentJobs.ts` - document workflow state and progress event handling
 - `src-tauri/src/document/` - Rust document processing modules
@@ -138,5 +159,6 @@ For the current desktop validation path, use a Windows host with `stable-msvc`.
 
 - Improve PDF text extraction quality while keeping extracted text temporary.
 - Expand Excel validation summaries for data quality review without evaluating formulas.
-- Add context preview for LLM-assisted Markdown and report wording.
+- Add UI-level coverage for provider migration scrub, document private mode, and send-review flows.
 - Add more DOCX templates for repeatable report formats.
+- Review endpoint handling and secret flows with a security-focused pass.
