@@ -6,9 +6,11 @@ PilotBell is a Rust + Tauri desktop tool for fast local document processing with
 
 The product direction is narrow by design: selected PDFs and Excel workbooks are processed in Rust, converted into reviewable Markdown and sanitized SVG, and exported as DOCX reports. LLM providers assist with draft wording and report shaping only after the user reviews what local document context may be sent.
 
+PilotBell is designed more like a sharp desktop utility than a browser-like AI workspace. The intended flow is simple: press Alt+Space, select or drop in a local document, let Rust handle extraction and output generation, review any context before it leaves the machine, and use hosted or local LLM providers only where they make the workflow faster.
+
 ## Why This Matters
 
-Most desktop AI tooling is optimized either for cloud-first chat or for broad agent frameworks. PilotBell is aimed at a different gap: local document workflows where users need faster extraction and drafting help without giving up control over files, intermediate context, provider routing, or output formats.
+Most desktop AI tooling is optimized either for cloud-first chat, browser-like workspaces, or broad agent frameworks. PilotBell is aimed at a different gap: a low-friction desktop utility for local document workflows where users can move quickly, keep Rust-native processing and repeatable outputs in the foreground, and still retain explicit control over files, outbound context, provider routing, and intermediate workflow state.
 
 That makes the project useful as OSS in three ways:
 
