@@ -151,7 +151,7 @@ pub(super) fn parse_anthropic_messages_output(
     Ok(text)
 }
 
-pub(super) fn parse_ollama_generate_output(
+pub(super) fn parse_ollama_output(
     raw: &str,
     parsed: Value,
 ) -> Result<String, ProviderCommandError> {
@@ -165,23 +165,25 @@ pub(super) fn parse_ollama_generate_output(
         }
     }
 
-    parsed
+    let content = parsed
         .get("response")
         .and_then(Value::as_str)
+        .or_else(|| chat_completion_text(&parsed))
         .map(str::trim)
         .filter(|text| !text.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            let details = preview_text(raw)
-                .map(Cow::Owned)
-                .unwrap_or_else(|| Cow::Borrowed("Response contained no generated text."));
-            ProviderCommandError::new(
-                ProviderErrorKind::ResponseFormat,
-                "No generated text was found in the Ollama response.",
-                false,
-            )
-            .with_details(details)
-        })
+        .map(str::to_string);
+
+    content.ok_or_else(|| {
+        let details = preview_text(raw)
+            .map(Cow::Owned)
+            .unwrap_or_else(|| Cow::Borrowed("Response contained no generated text."));
+        ProviderCommandError::new(
+            ProviderErrorKind::ResponseFormat,
+            "No generated text was found in the Ollama response.",
+            false,
+        )
+        .with_details(details)
+    })
 }
 
 pub(super) fn parse_llama_cpp_chat_output(
@@ -198,17 +200,7 @@ pub(super) fn parse_llama_cpp_chat_output(
         }
     }
 
-    let content = parsed
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .or_else(|| choice.get("text"))
-        })
-        .and_then(Value::as_str)
+    let content = chat_completion_text(&parsed)
         .or_else(|| parsed.get("content").and_then(Value::as_str))
         .map(str::trim)
         .filter(|text| !text.is_empty())
@@ -225,6 +217,20 @@ pub(super) fn parse_llama_cpp_chat_output(
         )
         .with_details(details)
     })
+}
+
+fn chat_completion_text(parsed: &Value) -> Option<&str> {
+    parsed
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .or_else(|| choice.get("text"))
+        })
+        .and_then(Value::as_str)
 }
 
 pub(super) fn provider_error_message(parsed: &Value) -> Option<String> {

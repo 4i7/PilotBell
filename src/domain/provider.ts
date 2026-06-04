@@ -196,7 +196,8 @@ export function getProviderCapabilities(kind: ProviderKind): ProviderCapability[
         },
         {
           label: "Ollama generate",
-          detail: "Uses the /api/generate request and response shape.",
+          detail:
+            "Uses the native /api/generate shape by default; /v1/chat/completions is also accepted for OpenAI-compatible Ollama endpoints.",
         },
       ];
     case LLAMA_CPP_PROVIDER_KIND:

@@ -1,9 +1,9 @@
 use super::payloads::{
-    build_anthropic_messages_payload, build_llama_cpp_chat_payload, build_ollama_generate_payload,
+    build_anthropic_messages_payload, build_llama_cpp_chat_payload, build_ollama_payload,
     build_openai_responses_payload,
 };
 use super::responses::{
-    parse_anthropic_messages_output, parse_llama_cpp_chat_output, parse_ollama_generate_output,
+    parse_anthropic_messages_output, parse_llama_cpp_chat_output, parse_ollama_output,
     parse_openai_responses_output, preview_text, provider_error_message,
 };
 use super::secrets::read_provider_secret;
@@ -81,9 +81,9 @@ fn provider_adapter(kind: ProviderKind) -> ProviderAdapter {
             healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",
             requires_secret: false,
             validate: validate_ollama_provider,
-            build_payload: build_ollama_generate_payload,
+            build_payload: build_ollama_payload,
             prepare_request: prepare_local_request,
-            parse_response: parse_ollama_generate_output,
+            parse_response: parse_ollama_output,
         },
         ProviderKind::LlamaCpp => ProviderAdapter {
             healthcheck_prompt: "Reply exactly with: PilotBell provider test OK",

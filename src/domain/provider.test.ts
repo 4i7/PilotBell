@@ -7,6 +7,7 @@ import {
   OLLAMA_PROVIDER_KIND,
   type ProviderDraft,
   classifyProviderEndpoint,
+  getProviderCapabilities,
   isLoopbackEndpoint,
   isProviderDraftValid,
   isProviderKind,
@@ -59,6 +60,27 @@ describe("official hosted endpoints", () => {
     );
     expect(officialEndpointForProvider(LLAMA_CPP_PROVIDER_KIND)).toBe(
       "http://127.0.0.1:8080/v1/chat/completions",
+    );
+  });
+});
+
+describe("provider capability metadata", () => {
+  it("describes Ollama as a local generate provider with chat completions compatibility", () => {
+    expect(getProviderCapabilities(OLLAMA_PROVIDER_KIND)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Ollama generate",
+          detail: expect.stringContaining("/api/generate"),
+        }),
+      ]),
+    );
+    expect(getProviderCapabilities(OLLAMA_PROVIDER_KIND)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Ollama generate",
+          detail: expect.stringContaining("/v1/chat/completions"),
+        }),
+      ]),
     );
   });
 });
