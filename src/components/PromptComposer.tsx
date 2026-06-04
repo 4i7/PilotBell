@@ -112,6 +112,8 @@ export function PromptComposer({
   const ChevronDownIcon = icons.ChevronDown;
   const CloseIcon = icons.Close;
   const isEmptySession = sessionEntryCount === 0;
+  const isCompactComposer =
+    isEmptySession && attachedFiles.length === 0 && !pendingPromptContextPreview;
 
   const canSubmit =
     Boolean(prompt.trim()) &&
@@ -132,9 +134,9 @@ export function PromptComposer({
     enabled: inputPreferences.autoResize,
     value: prompt,
     textareaRef: promptRef,
-    minRows: isEmptySession ? 10 : 2,
-    maxRows: isEmptySession ? 18 : 8,
-    maxHeightVh: isEmptySession ? 70 : 35,
+    minRows: isCompactComposer ? 1 : 2,
+    maxRows: isCompactComposer ? 3 : isEmptySession ? 5 : 8,
+    maxHeightVh: isCompactComposer ? 24 : isEmptySession ? 40 : 35,
   });
 
   usePromptSubmitHotkey({
@@ -153,6 +155,7 @@ export function PromptComposer({
       className={[
         "composer-dock",
         isEmptySession ? "empty-composer" : "",
+        isCompactComposer ? "compact-composer" : "",
         isDraggingFiles ? "dragging" : "",
       ]
         .filter(Boolean)
@@ -162,7 +165,7 @@ export function PromptComposer({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      {shouldPromptInitialSetup ? (
+      {shouldPromptInitialSetup && !isCompactComposer ? (
         <p className="composer-setup-note">
           No provider configured. Add OpenAI, Anthropic, Ollama, or llama.cpp to start.
         </p>
@@ -234,6 +237,7 @@ export function PromptComposer({
 
         <div className="composer-side">
           <ProviderSelector
+            className={selectedProvider ? undefined : "provider-switcher-empty"}
             selectedProvider={selectedProvider}
             selectedProviderId={selectedProviderId}
             providers={providers}

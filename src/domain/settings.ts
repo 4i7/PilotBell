@@ -1,8 +1,16 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 export type SettingsSection = "providers" | "documents" | "sources";
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
   return value === "providers" || value === "documents" || value === "sources";
 }
+
+type SettingsWindowGlobals = Window & {
+  __PILOTBELL_SETTINGS_WINDOW__?: boolean;
+  __PILOTBELL_SETTINGS_SECTION__?: unknown;
+  __TAURI_INTERNALS__?: unknown;
+};
 
 function getSettingsWindowParams() {
   if (typeof window === "undefined") {
@@ -18,13 +26,37 @@ function getSettingsWindowParams() {
   return new URLSearchParams([...queryParams, ...hashParams]);
 }
 
+function getCurrentTauriWindowLabel() {
+  if (!hasTauriRuntime()) {
+    return null;
+  }
+
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return null;
+  }
+}
+
 export function getInitialSettingsSection(): SettingsSection {
+  if (typeof window !== "undefined") {
+    const section = (window as SettingsWindowGlobals).__PILOTBELL_SETTINGS_SECTION__;
+    if (isSettingsSection(section)) {
+      return section;
+    }
+  }
+
   const section = getSettingsWindowParams().get("section");
   return isSettingsSection(section) ? section : "providers";
 }
 
 export function isSettingsWindowView() {
-  return getSettingsWindowParams().get("view") === "settings";
+  return (
+    getSettingsWindowParams().get("view") === "settings" ||
+    getCurrentTauriWindowLabel() === "settings" ||
+    (typeof window !== "undefined" &&
+      (window as SettingsWindowGlobals).__PILOTBELL_SETTINGS_WINDOW__ === true)
+  );
 }
 
 export function hasTauriRuntime() {
@@ -32,8 +64,5 @@ export function hasTauriRuntime() {
     return false;
   }
 
-  return (
-    typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-    "undefined"
-  );
+  return typeof (window as SettingsWindowGlobals).__TAURI_INTERNALS__ !== "undefined";
 }

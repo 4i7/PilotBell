@@ -207,6 +207,8 @@ function App() {
     toneForProviderError,
   });
   const chatEntries = useMemo(() => [...sessionEntries].reverse(), [sessionEntries]);
+  const isCompactMainSurface =
+    chatEntries.length === 0 && attachedFiles.length === 0 && !pendingPromptContextPreview;
   const hasSuccessfulSession = useMemo(
     () => sessionEntries.some((entry) => Boolean(entry.response)),
     [sessionEntries],
@@ -237,6 +239,7 @@ function App() {
   } = useTauriWindowShell({
     browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
     closeSettings,
+    hasExpandedMainSurface: !isCompactMainSurface,
     isSettingsOpen: settingsOpen,
     isSettingsWindow,
     isTauriRuntime,
@@ -395,7 +398,9 @@ function App() {
           />
 
           <section className="workspace">
-            <div className={chatEntries.length === 0 ? "chat-surface empty-session" : "chat-surface"}>
+            <div
+              className={chatEntries.length === 0 ? "chat-surface empty-session" : "chat-surface"}
+            >
               <SessionHistory
                 entries={chatEntries}
                 isSending={isSending}
@@ -404,6 +409,24 @@ function App() {
                 onRetry={retrySessionEntry}
                 onCopy={(text, label) => void copyText(text, label)}
               />
+
+              {chatStatus && !isCompactMainSurface ? (
+                <div className={`notice notice-${chatStatus.tone}`}>
+                  <span>{chatStatus.message}</span>
+                  {chatStatus.dismissKey === "global-shortcut" ? (
+                    <button
+                      type="button"
+                      className="notice-dismiss"
+                      onClick={dismissGlobalShortcutNotice}
+                    >
+                      Hide next time
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {replyError?.details && !isCompactMainSurface ? (
+                <pre className="detail">{replyError.details}</pre>
+              ) : null}
 
               <PromptComposer
                 prompt={prompt}
@@ -451,22 +474,6 @@ function App() {
                 testProvider={() => void testProvider()}
                 clearSession={clearSession}
               />
-
-              {chatStatus ? (
-                <div className={`notice notice-${chatStatus.tone}`}>
-                  <span>{chatStatus.message}</span>
-                  {chatStatus.dismissKey === "global-shortcut" ? (
-                    <button
-                      type="button"
-                      className="notice-dismiss"
-                      onClick={dismissGlobalShortcutNotice}
-                    >
-                      Hide next time
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-              {replyError?.details ? <pre className="detail">{replyError.details}</pre> : null}
             </div>
           </section>
         </div>

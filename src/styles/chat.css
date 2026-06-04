@@ -16,6 +16,7 @@
 
 .chat-surface.empty-session {
   gap: 0;
+  justify-content: center;
 }
 
 .chat-empty {
