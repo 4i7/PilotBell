@@ -90,11 +90,14 @@ describe("isLoopbackEndpoint", () => {
     expect(isLoopbackEndpoint("http://localhost:11434/api/generate")).toBe(true);
     expect(isLoopbackEndpoint("http://127.0.0.1:8080/v1/chat/completions")).toBe(true);
     expect(isLoopbackEndpoint("http://[::1]:11434/api/generate")).toBe(true);
+    expect(isLoopbackEndpoint("http://[0:0:0:0:0:0:0:1]:11434/api/generate")).toBe(true);
   });
 
   it("treats LAN, external, and malformed endpoints as non-loopback", () => {
     expect(isLoopbackEndpoint("http://192.168.1.50:11434/api/generate")).toBe(false);
     expect(isLoopbackEndpoint("https://example.com/v1/chat/completions")).toBe(false);
+    expect(isLoopbackEndpoint("http://localhost.:11434/api/generate")).toBe(false);
+    expect(isLoopbackEndpoint("http://user:pass@localhost:11434/api/generate")).toBe(false);
     expect(isLoopbackEndpoint("not-a-valid-url")).toBe(false);
     expect(isLoopbackEndpoint("")).toBe(false);
   });
@@ -121,6 +124,22 @@ describe("classifyProviderEndpoint safety warnings", () => {
     expect(risk.isAdvanced).toBe(true);
     expect(risk.tone).toBe("warning");
     expect(risk.message.toLowerCase()).toContain("advanced");
+  });
+
+  it("does not treat URL parser edge cases as official hosted endpoints", () => {
+    const endpoints = [
+      "https://api.openai.com@evil.example/v1/responses",
+      "https://user:pass@api.openai.com/v1/responses",
+      "https://api.openai.com./v1/responses",
+      "https://api.openai.com/v1/responses?redirect=https://evil.example",
+      "https://api.openai.com/v1/responses#fragment",
+    ];
+
+    for (const endpoint of endpoints) {
+      const risk = classifyProviderEndpoint(DEFAULT_PROVIDER_KIND, endpoint);
+      expect(risk.isAdvanced).toBe(true);
+      expect(risk.tone).toBe("warning");
+    }
   });
 
   it("treats a local provider on a loopback endpoint as neutral and non-advanced", () => {

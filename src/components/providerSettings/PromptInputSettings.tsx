@@ -92,32 +92,6 @@ export function PromptInputSettings({
           />
           Auto-resize the prompt field
         </label>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={inputPreferences.reviewCloudBeforeSend}
-            onChange={(event) =>
-              updateInputPreferences((current) => ({
-                ...current,
-                reviewCloudBeforeSend: event.currentTarget.checked,
-              }))
-            }
-          />
-          Require review before cloud sends
-        </label>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={inputPreferences.reviewAdvancedEndpointsBeforeSend}
-            onChange={(event) =>
-              updateInputPreferences((current) => ({
-                ...current,
-                reviewAdvancedEndpointsBeforeSend: event.currentTarget.checked,
-              }))
-            }
-          />
-          Require explicit opt-in before advanced endpoint sends
-        </label>
       </div>
     </div>
   );

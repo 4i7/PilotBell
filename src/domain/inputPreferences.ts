@@ -66,14 +66,8 @@ export function normalizePromptInputPreferences(
       typeof item.autoResize === "boolean"
         ? item.autoResize
         : DEFAULT_PROMPT_INPUT_PREFERENCES.autoResize,
-    reviewCloudBeforeSend:
-      typeof item.reviewCloudBeforeSend === "boolean"
-        ? item.reviewCloudBeforeSend
-        : DEFAULT_PROMPT_INPUT_PREFERENCES.reviewCloudBeforeSend,
-    reviewAdvancedEndpointsBeforeSend:
-      typeof item.reviewAdvancedEndpointsBeforeSend === "boolean"
-        ? item.reviewAdvancedEndpointsBeforeSend
-        : DEFAULT_PROMPT_INPUT_PREFERENCES.reviewAdvancedEndpointsBeforeSend,
+    reviewCloudBeforeSend: true,
+    reviewAdvancedEndpointsBeforeSend: true,
     documentPrivateMode:
       typeof item.documentPrivateMode === "boolean"
         ? item.documentPrivateMode
