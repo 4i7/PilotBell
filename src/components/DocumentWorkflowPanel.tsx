@@ -1,18 +1,47 @@
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { documentFailureGuidance, type DocumentJobDraft, type DocumentJobMetadata, type DocumentJobProgress } from "../domain/document";
+import {
+  documentFailureGuidance,
+  type DocumentJobDraft,
+  type DocumentJobMetadata,
+  type DocumentJobProgress,
+  type ReviewableDocumentJob,
+} from "../domain/document";
+import type { PromptContextPreview } from "../domain/prompt";
+import type { ProviderConfig } from "../domain/provider";
 import { ProgressPanel } from "./ProgressPanel";
+import { PromptContextPreviewPanel } from "./PromptContextPreviewPanel";
 
 type DocumentWorkflowPanelProps = {
   draft: DocumentJobDraft;
   setDraft: (draft: DocumentJobDraft) => void;
   jobs: DocumentJobMetadata[];
+  reviewableJobs: Record<string, ReviewableDocumentJob>;
   progress: DocumentJobProgress | null;
   statusMessage: string;
   isRunning: boolean;
+  selectedProvider: ProviderConfig | null;
   isTauriRuntime: boolean;
   privateMode: boolean;
   setPrivateMode: (value: boolean) => void;
+  documentAssistStatus: {
+    tone: "neutral" | "success" | "warning" | "error";
+    message: string;
+  } | null;
+  documentAssistReplyError: {
+    details?: string | null;
+  } | null;
+  documentAssistLastResult: {
+    content: string;
+    providerLabel: string;
+    fileName: string;
+  } | null;
+  pendingDocumentContextPreview: PromptContextPreview | null;
+  onOpenProviderSettings: () => void;
+  onRequestDocumentAssistReview: (job: ReviewableDocumentJob) => void;
+  onApproveDocumentAssistReview: () => void;
+  onCancelDocumentAssistReview: () => void;
+  onClearDocumentAssistResult: () => void;
   onStart: () => void;
   onCancel: () => void;
   onClear: () => void;
@@ -22,12 +51,23 @@ export function DocumentWorkflowPanel({
   draft,
   setDraft,
   jobs,
+  reviewableJobs,
   progress,
   statusMessage,
   isRunning,
+  selectedProvider,
   isTauriRuntime,
   privateMode,
   setPrivateMode,
+  documentAssistStatus,
+  documentAssistReplyError,
+  documentAssistLastResult,
+  pendingDocumentContextPreview,
+  onOpenProviderSettings,
+  onRequestDocumentAssistReview,
+  onApproveDocumentAssistReview,
+  onCancelDocumentAssistReview,
+  onClearDocumentAssistResult,
   onStart,
   onCancel,
   onClear,
@@ -61,7 +101,13 @@ export function DocumentWorkflowPanel({
     }
   }
 
-  const latestFailure = jobs.find((job) => job.status === "failed") ?? null;
+  const latestJob = jobs[0] ?? null;
+  const latestFailure = latestJob?.status === "failed" ? latestJob : null;
+  const latestReviewableMetadata =
+    jobs.find((job) => job.status === "completed" && reviewableJobs[job.jobId]) ?? null;
+  const latestReviewableJob = latestReviewableMetadata
+    ? reviewableJobs[latestReviewableMetadata.jobId] ?? null
+    : null;
 
   return (
     <div className="settings-section">
@@ -70,15 +116,15 @@ export function DocumentWorkflowPanel({
           <h3>Document workflow</h3>
           <p>
             Analyze a selected PDF or Excel workbook in Rust, then generate reviewable Markdown,
-            sanitized SVG, and DOCX outputs. Document text is not stored in localStorage and is not
-            sent to a provider by this workflow today.
+            sanitized SVG, and DOCX outputs. When LLM wording help is used, PilotBell shows the
+            provider payload before any document-derived context is sent.
           </p>
         </div>
       </div>
 
       <div className="notice notice-neutral">
-        Provider-assisted drafting is reserved for a future slice. The current document workflow
-        runs locally in Rust, and provider selection is intentionally disabled until that changes.
+        Local document processing still runs in Rust first. LLM assistance is optional and uses the
+        generated Markdown review draft rather than raw persisted document storage.
       </div>
 
       <div className="notice notice-neutral">
@@ -112,11 +158,16 @@ export function DocumentWorkflowPanel({
           <option value="executive-brief">Executive brief</option>
         </select>
         <select
-          value=""
+          value={selectedProvider?.id ?? ""}
+          onChange={() => undefined}
           disabled
-          aria-label="Provider-assisted drafting is not available yet"
+          aria-label="Selected provider"
         >
-          <option value="">Provider-assisted drafting reserved for future release</option>
+          <option value={selectedProvider?.id ?? ""}>
+            {selectedProvider
+              ? `${selectedProvider.name} / ${selectedProvider.model || "model not set"}`
+              : "No provider selected"}
+          </option>
         </select>
       </div>
 
@@ -151,6 +202,48 @@ export function DocumentWorkflowPanel({
         </button>
       </div>
 
+      <div className="context-preview-card">
+        <div className="section-title">LLM wording review</div>
+        <p className="helper">
+          Use the newest completed Markdown review draft as provider context after inspecting the
+          exact payload.
+        </p>
+        <p className="context-preview-meta">
+          Selected provider:{" "}
+          {selectedProvider
+            ? `${selectedProvider.name} / ${selectedProvider.model || "model not set"}`
+            : "No provider selected"}
+        </p>
+        {latestReviewableJob ? (
+          <p className="context-preview-meta">
+            Ready source: {latestReviewableJob.fileName} / template {latestReviewableJob.selectedTemplate}
+          </p>
+        ) : (
+          <p className="helper">Run a successful local document workflow to prepare reviewable Markdown.</p>
+        )}
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="button-save"
+            onClick={() => latestReviewableJob && onRequestDocumentAssistReview(latestReviewableJob)}
+            disabled={!latestReviewableJob || isRunning}
+          >
+            Review LLM context
+          </button>
+          <button type="button" className="secondary" onClick={onOpenProviderSettings}>
+            Provider settings
+          </button>
+        </div>
+      </div>
+
+      {pendingDocumentContextPreview ? (
+        <PromptContextPreviewPanel
+          preview={pendingDocumentContextPreview}
+          onApprove={onApproveDocumentAssistReview}
+          onCancel={onCancelDocumentAssistReview}
+        />
+      ) : null}
+
       <ProgressPanel
         progress={progress}
         message={statusMessage || "No document workflow is running."}
@@ -167,6 +260,31 @@ export function DocumentWorkflowPanel({
       />
 
       {statusMessage ? <div className="notice notice-neutral">{statusMessage}</div> : null}
+      {documentAssistStatus ? (
+        <div className={`notice notice-${documentAssistStatus.tone}`}>
+          <span>{documentAssistStatus.message}</span>
+        </div>
+      ) : null}
+      {documentAssistReplyError?.details ? (
+        <pre className="detail">{documentAssistReplyError.details}</pre>
+      ) : null}
+      {documentAssistLastResult ? (
+        <div className="context-preview-card">
+          <div className="section-title">Latest LLM wording output</div>
+          <p className="context-preview-meta">
+            {documentAssistLastResult.fileName} via {documentAssistLastResult.providerLabel}
+          </p>
+          <p className="helper">
+            This result stays in memory only for the current app session.
+          </p>
+          <pre className="context-preview-body">{documentAssistLastResult.content}</pre>
+          <div className="settings-actions">
+            <button type="button" className="secondary" onClick={onClearDocumentAssistResult}>
+              Clear in-memory result
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {jobs.length > 0 ? (
         <ul className="source-list">

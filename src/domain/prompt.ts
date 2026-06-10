@@ -8,11 +8,10 @@ export type AttachedPromptFile = {
   textTruncated?: boolean;
 };
 
-export type PromptContextPreviewAttachment = {
+export type PromptContextPreviewItem = {
   id: string;
   name: string;
-  size: number;
-  type: string;
+  detail: string;
   excerpt: string | null;
   note: string | null;
   textTruncated: boolean;
@@ -20,6 +19,11 @@ export type PromptContextPreviewAttachment = {
 };
 
 export type PromptContextPreview = {
+  title: string;
+  helperText: string;
+  contextTitle: string;
+  emptyContextMessage: string;
+  approveLabel: string;
   preparedPrompt: string;
   providerLabel: string;
   providerEndpoint: string;
@@ -28,7 +32,7 @@ export type PromptContextPreview = {
     tone: "neutral" | "warning";
     summary: string;
   };
-  attachments: PromptContextPreviewAttachment[];
+  contextItems: PromptContextPreviewItem[];
   warnings: string[];
   estimatedChars: number;
   requiresCloudReview: boolean;

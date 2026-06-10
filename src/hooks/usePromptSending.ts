@@ -53,7 +53,7 @@ function makeSessionEntryId() {
 function shouldGatePromptSend(
   preview: PromptContextPreview,
 ) {
-  return preview.requiresExplicitOptIn || preview.requiresCloudReview || preview.attachments.length > 0;
+  return preview.requiresExplicitOptIn || preview.requiresCloudReview || preview.contextItems.length > 0;
 }
 
 export function usePromptSending({

@@ -18,10 +18,8 @@ export function PromptContextPreviewPanel({
     >
       <div className="section-heading">
         <div>
-          <div className="section-title">Prompt context review</div>
-          <p className="helper">
-            This is the exact prompt body that will be sent once approved.
-          </p>
+          <div className="section-title">{preview.title}</div>
+          <p className="helper">{preview.helperText}</p>
         </div>
         <span className={`readiness readiness-${preview.providerRisk.tone}`}>
           {preview.requiresCloudReview ? "Cloud review required" : "Local review"}
@@ -47,17 +45,14 @@ export function PromptContextPreviewPanel({
         </div>
 
         <div className="context-preview-card">
-          <div className="section-title">Attachments</div>
-          {preview.attachments.length > 0 ? (
+          <div className="section-title">{preview.contextTitle}</div>
+          {preview.contextItems.length > 0 ? (
             <ul className="context-preview-list">
-              {preview.attachments.map((file) => (
+              {preview.contextItems.map((file) => (
                 <li key={file.id} className="context-preview-item">
                   <div className="context-preview-file">
                     <strong>{file.name}</strong>
-                    <span>
-                      {file.size.toLocaleString()} bytes
-                      {file.type ? ` / ${file.type}` : ""}
-                    </span>
+                    <span>{file.detail}</span>
                   </div>
                   <p className="context-preview-meta">
                     Included characters: {file.includedCharCount.toLocaleString()}
@@ -70,7 +65,7 @@ export function PromptContextPreviewPanel({
               ))}
             </ul>
           ) : (
-            <p className="helper">No local attachment context is queued for this send.</p>
+            <p className="helper">{preview.emptyContextMessage}</p>
           )}
         </div>
       </div>
@@ -102,7 +97,7 @@ export function PromptContextPreviewPanel({
 
       <div className="settings-actions">
         <button type="button" className="button-save" onClick={onApprove}>
-          {preview.requiresExplicitOptIn ? "I understand, send anyway" : "Send reviewed prompt"}
+          {preview.approveLabel}
         </button>
         <button type="button" className="secondary" onClick={onCancel}>
           Cancel review

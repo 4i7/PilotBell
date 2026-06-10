@@ -64,6 +64,7 @@ pub struct DocumentWorkflowResult {
     pub markdown_path: String,
     pub svg_path: String,
     pub docx_path: String,
+    pub markdown_content: String,
     pub warnings: Vec<String>,
 }
 

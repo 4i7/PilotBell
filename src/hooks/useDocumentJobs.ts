@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   DEFAULT_DOCUMENT_TEMPLATE,
   DOCUMENT_JOB_PROGRESS_EVENT,
+  type ReviewableDocumentJob,
   classifyDocumentFailure,
   documentFailureGuidance,
   type DocumentJobDraft,
@@ -30,6 +31,7 @@ const DEFAULT_DRAFT: DocumentJobDraft = {
 export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
   const [draft, setDraft] = useState<DocumentJobDraft>({ ...DEFAULT_DRAFT });
   const [jobs, setJobs] = useState<DocumentJobMetadata[]>(() => loadDocumentJobs());
+  const [reviewableJobs, setReviewableJobs] = useState<Record<string, ReviewableDocumentJob>>({});
   const [progress, setProgress] = useState<Record<string, DocumentJobProgress>>({});
   const [activeJobId, setActiveJobId] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -111,6 +113,15 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
         warnings: result.warnings,
         failureKind: null,
       };
+      setReviewableJobs((current) => ({
+        ...current,
+        [completedJob.jobId]: {
+          jobId: completedJob.jobId,
+          fileName: completedJob.fileName,
+          selectedTemplate: completedJob.selectedTemplate,
+          markdownContent: result.markdownContent,
+        },
+      }));
       persistJobs([completedJob, ...jobs]);
       setStatusMessage(
         result.warnings.length > 0
@@ -153,6 +164,7 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
 
   function clearJobs() {
     persistJobs([]);
+    setReviewableJobs({});
     setProgress({});
     setStatusMessage("Document job metadata cleared.");
   }
@@ -167,6 +179,7 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
     draft,
     setDraft,
     jobs,
+    reviewableJobs,
     progress,
     activeProgress,
     latestProgress,

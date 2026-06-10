@@ -35,6 +35,7 @@ import {
   SunIcon,
 } from "./components/icons";
 import { useDocumentJobs } from "./hooks/useDocumentJobs";
+import { useDocumentLlmAssist } from "./hooks/useDocumentLlmAssist";
 import { useLocalSources } from "./hooks/useLocalSources";
 import { usePromptAttachments } from "./hooks/usePromptAttachments";
 import { usePromptSending } from "./hooks/usePromptSending";
@@ -205,6 +206,21 @@ function App() {
     setChatStatus,
     setPrompt,
     toneForProviderError,
+  });
+  const {
+    pendingDocumentContextPreview,
+    documentAssistStatus,
+    documentAssistReplyError,
+    documentAssistLastResult,
+    clearDocumentAssistResult,
+    requestDocumentAssistReview,
+    cancelDocumentAssistReview,
+    approveDocumentAssistReview,
+  } = useDocumentLlmAssist({
+    browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
+    isTauriRuntime,
+    selectedProvider,
+    openProviderSettings: () => openSettings("providers"),
   });
   const chatEntries = useMemo(() => [...sessionEntries].reverse(), [sessionEntries]);
   const isCompactMainSurface =
@@ -544,9 +560,11 @@ function App() {
                 draft={documentJobs.draft}
                 setDraft={documentJobs.setDraft}
                 jobs={documentJobs.jobs}
+                reviewableJobs={documentJobs.reviewableJobs}
                 progress={documentJobs.activeProgress ?? documentJobs.latestProgress}
                 statusMessage={documentJobs.statusMessage}
                 isRunning={documentJobs.isRunning}
+                selectedProvider={selectedProvider}
                 isTauriRuntime={isTauriRuntime}
                 privateMode={inputPreferences.documentPrivateMode}
                 setPrivateMode={(value) =>
@@ -555,9 +573,21 @@ function App() {
                     documentPrivateMode: value,
                   }))
                 }
+                documentAssistStatus={documentAssistStatus}
+                documentAssistReplyError={documentAssistReplyError}
+                documentAssistLastResult={documentAssistLastResult}
+                pendingDocumentContextPreview={pendingDocumentContextPreview}
+                onOpenProviderSettings={() => openSettings("providers")}
+                onRequestDocumentAssistReview={requestDocumentAssistReview}
+                onApproveDocumentAssistReview={() => void approveDocumentAssistReview()}
+                onCancelDocumentAssistReview={cancelDocumentAssistReview}
+                onClearDocumentAssistResult={clearDocumentAssistResult}
                 onStart={() => void documentJobs.startJob()}
                 onCancel={() => void documentJobs.cancelActiveJob()}
-                onClear={documentJobs.clearJobs}
+                onClear={() => {
+                  clearDocumentAssistResult();
+                  documentJobs.clearJobs();
+                }}
               />
             ) : (
               <SourceSettingsSection

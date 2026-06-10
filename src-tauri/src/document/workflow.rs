@@ -219,6 +219,7 @@ fn run_document_workflow_blocking(
     Ok(build_workflow_result(
         metadata,
         prepared.output_paths,
+        rendered.markdown,
         analysis.warnings,
     ))
 }
@@ -352,6 +353,7 @@ fn write_workflow_outputs(
 fn build_workflow_result(
     metadata: DocumentJobMetadata,
     output_paths: OutputPaths,
+    markdown_content: String,
     warnings: Vec<String>,
 ) -> DocumentWorkflowResult {
     DocumentWorkflowResult {
@@ -359,6 +361,7 @@ fn build_workflow_result(
         markdown_path: output_paths.markdown_path.display().to_string(),
         svg_path: output_paths.svg_path.display().to_string(),
         docx_path: output_paths.docx_path.display().to_string(),
+        markdown_content,
         warnings,
     }
 }

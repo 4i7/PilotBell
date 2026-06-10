@@ -58,6 +58,7 @@ export type DocumentWorkflowResult = {
   markdownPath: string;
   svgPath: string;
   docxPath: string;
+  markdownContent: string;
   warnings: string[];
 };
 
@@ -66,6 +67,13 @@ export type DocumentJobDraft = {
   outputDir: string;
   selectedTemplate: string;
   overwrite: boolean;
+};
+
+export type ReviewableDocumentJob = {
+  jobId: string;
+  fileName: string;
+  selectedTemplate: string;
+  markdownContent: string;
 };
 
 export const DOCUMENT_JOB_PROGRESS_EVENT = "pilotbell://document-job-progress";
