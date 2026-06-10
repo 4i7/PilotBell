@@ -39,6 +39,9 @@ export function PromptContextPreviewPanel({
             Stored API key used: {preview.secretWillBeUsed ? "Yes" : "No"}
           </p>
           <p className="context-preview-meta">
+            Stored API key available: {preview.storedSecretAvailable ? "Yes" : "No"}
+          </p>
+          <p className="context-preview-meta">
             Estimated prompt size: {preview.estimatedChars.toLocaleString()} characters
           </p>
         </div>
