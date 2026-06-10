@@ -118,14 +118,37 @@ fn validate_provider_accepts_llama_cpp_without_secret() {
     assert!(validate_provider(&sample_llama_cpp_provider()).is_ok());
 }
 
+fn sample_ollama_chat_provider() -> ProviderConfig {
+    ProviderConfig {
+        endpoint: "http://127.0.0.1:11434/v1/chat/completions".into(),
+        ..sample_ollama_provider()
+    }
+}
+
 #[test]
-fn build_ollama_payload_disables_streaming() {
+fn build_ollama_payload_uses_native_generate_shape_by_default() {
     let provider = sample_ollama_provider();
-    let payload = build_ollama_generate_payload(&provider, "hello");
+
+    let payload = build_ollama_payload(&provider, "hello");
 
     assert_eq!(payload["model"], "llama3.2");
     assert_eq!(payload["prompt"], "hello");
     assert_eq!(payload["stream"], false);
+    assert!(payload.get("messages").is_none());
+}
+
+#[test]
+fn build_ollama_payload_supports_openai_chat_completions_endpoint() {
+    let provider = sample_ollama_chat_provider();
+
+    let payload = build_ollama_payload(&provider, "hello");
+
+    assert_eq!(payload["model"], "llama3.2");
+    assert_eq!(payload["messages"][0]["role"], "user");
+    assert_eq!(payload["messages"][0]["content"], "hello");
+    assert_eq!(payload["stream"], false);
+    assert_eq!(payload["reasoning_effort"], "none");
+    assert!(payload.get("prompt").is_none());
 }
 
 #[test]
@@ -221,10 +244,27 @@ fn parse_anthropic_response_extracts_text_content() {
 fn parse_ollama_response_extracts_generated_text() {
     let raw = r#"{ "model": "llama3.2", "response": "local answer", "done": true }"#;
     let parsed: Value = serde_json::from_str(raw).expect("response should parse");
-    let text =
-        parse_ollama_generate_output(raw, parsed).expect("generated text should be extracted");
+    let text = parse_ollama_output(raw, parsed).expect("generated text should be extracted");
 
     assert_eq!(text, "local answer");
+}
+
+#[test]
+fn parse_ollama_response_extracts_chat_completion_text() {
+    let raw = r#"{
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "chat answer"
+                }
+            }
+        ]
+    }"#;
+    let parsed: Value = serde_json::from_str(raw).expect("response should parse");
+    let text = parse_ollama_output(raw, parsed).expect("generated text should be extracted");
+
+    assert_eq!(text, "chat answer");
 }
 
 #[test]
