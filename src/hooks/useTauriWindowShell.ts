@@ -82,6 +82,7 @@ export function useTauriWindowShell({
   );
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const appliedMainWindowLayout = useRef<keyof typeof MAIN_WINDOW_LAYOUTS | null>(null);
+  const reportedBrowserPreview = useRef(false);
 
   async function hidePaletteWindow() {
     return invoke("hide_palette_window");
@@ -207,6 +208,11 @@ export function useTauriWindowShell({
     }
 
     if (!isTauriRuntime) {
+      if (reportedBrowserPreview.current) {
+        return;
+      }
+
+      reportedBrowserPreview.current = true;
       setSourceStatus({
         tone: "warning",
         message: browserPreviewMessage,

@@ -5,6 +5,26 @@
   font-size: 16px;
   line-height: 1.5;
   font-weight: 400;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --font-size-caption: 0.75rem;
+  --font-size-label: 0.84rem;
+  --font-size-body: 0.94rem;
+  --font-size-title: 1rem;
+  --font-size-heading: 1.38rem;
+  --font-weight-body: 400;
+  --font-weight-label: 650;
+  --font-weight-heading: 720;
+  --line-height-tight: 1.2;
+  --line-height-body: 1.5;
+  --control-height: 44px;
+  --radius-control: 12px;
+  --radius-panel: 16px;
+  --radius-shell: 20px;
+  --focus-ring: 0 0 0 3px var(--accent-ring);
   --bg-app: #eff1f5;
   --bg-app-accent: rgba(88, 101, 242, 0.08);
   --bg-shell: rgba(255, 255, 255, 0.84);
@@ -17,18 +37,18 @@
   --border-strong: rgba(88, 94, 112, 0.24);
   --text-primary: #1e1f24;
   --text-secondary: #595d69;
-  --text-muted: #7d818d;
+  --text-muted: #6f7480;
   --text-on-accent: #ffffff;
-  --accent: #5b4de8;
-  --accent-hover: #4a3fd4;
-  --accent-soft: rgba(91, 77, 232, 0.12);
-  --accent-ring: rgba(91, 77, 232, 0.22);
-  --success: #1f8f59;
+  --accent: #4f46d9;
+  --accent-hover: #4338ca;
+  --accent-soft: rgba(79, 70, 217, 0.12);
+  --accent-ring: rgba(79, 70, 217, 0.24);
+  --success: #1d7a4c;
   --success-soft: rgba(31, 143, 89, 0.14);
-  --danger: #c63a4d;
-  --danger-soft: rgba(198, 58, 77, 0.14);
-  --warning: #b36f19;
-  --warning-soft: rgba(179, 111, 25, 0.14);
+  --danger: #b4233a;
+  --danger-soft: rgba(180, 35, 58, 0.14);
+  --warning: #93600f;
+  --warning-soft: rgba(147, 96, 15, 0.14);
   --user-bubble: linear-gradient(135deg, #6b39d7 0%, #4f2db8 100%);
   --shadow-shell: 0 28px 60px rgba(18, 21, 31, 0.14);
   --shadow-popover: 0 16px 40px rgba(18, 21, 31, 0.18);
@@ -50,14 +70,14 @@
   --text-secondary: #b9bfce;
   --text-muted: #8b91a1;
   --text-on-accent: #ffffff;
-  --accent: #7a5cff;
-  --accent-hover: #8e74ff;
-  --accent-soft: rgba(122, 92, 255, 0.16);
-  --accent-ring: rgba(122, 92, 255, 0.26);
+  --accent: #6d5de8;
+  --accent-hover: #6758dc;
+  --accent-soft: rgba(109, 93, 232, 0.18);
+  --accent-ring: rgba(109, 93, 232, 0.3);
   --success: #47c178;
   --success-soft: rgba(71, 193, 120, 0.16);
-  --danger: #ff6f80;
-  --danger-soft: rgba(255, 111, 128, 0.16);
+  --danger: #d33249;
+  --danger-soft: rgba(211, 50, 73, 0.18);
   --warning: #f2b85e;
   --warning-soft: rgba(242, 184, 94, 0.16);
   --user-bubble: linear-gradient(135deg, #6c33e2 0%, #572cc2 100%);
@@ -110,4 +130,13 @@ select {
 button {
   border: 0;
   background: none;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
 }
