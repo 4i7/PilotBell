@@ -1,13 +1,18 @@
+use super::word::template_label;
 use super::DocumentAnalysis;
 
 pub fn render_markdown(analysis: &DocumentAnalysis, template: &str) -> String {
+    let template_label = template_label(template);
     let mut output = String::new();
     output.push_str(&format!("# {}\n\n", analysis.title));
     output.push_str("## Source\n\n");
     output.push_str(&format!("- File: `{}`\n", analysis.file_name));
     output.push_str(&format!("- Path: `{}`\n", analysis.source_path));
     output.push_str(&format!("- Type: `{}`\n", analysis.kind));
-    output.push_str(&format!("- Template: `{}`\n\n", template));
+    output.push_str(&format!(
+        "- Template: `{}` (`{}`)\n\n",
+        template_label, template
+    ));
 
     output.push_str("## Extracted Metadata\n\n");
     for (label, value) in &analysis.facts {

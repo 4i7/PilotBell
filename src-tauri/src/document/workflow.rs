@@ -11,7 +11,7 @@ use super::excel::analyze_excel;
 use super::markdown::render_markdown;
 use super::pdf::analyze_pdf;
 use super::svg::render_summary_svg;
-use super::word::write_docx;
+use super::word::{normalize_template_id, write_docx};
 use super::{
     DocumentJobMetadata, DocumentJobPhase, DocumentJobProgress, DocumentLimits,
     DocumentWorkflowRequest, DocumentWorkflowResult, DOCUMENT_JOB_PROGRESS_EVENT,
@@ -197,7 +197,13 @@ fn run_document_workflow_blocking(
     );
 
     let rendered = render_workflow_outputs(&workflow, &analysis, &prepared.selected_template)?;
-    write_workflow_outputs(&workflow, &prepared.output_paths, &rendered)?;
+    write_workflow_outputs(
+        &workflow,
+        &prepared.output_paths,
+        &rendered,
+        &analysis,
+        &prepared.selected_template,
+    )?;
 
     let metadata = build_metadata(
         &workflow.job_id,
@@ -236,9 +242,13 @@ fn prepare_workflow(
         .or_else(|message| workflow.fail(message))?;
     let output_paths = build_output_paths(&output_dir, &input_path, request.overwrite)?;
 
+    let selected_template = normalize_template_id(&request.selected_template)
+        .or_else(|message| workflow.fail(message))?
+        .to_string();
+
     Ok(PreparedWorkflow {
         input_path,
-        selected_template: request.selected_template,
+        selected_template,
         provider_id: request.provider_id,
         input_kind,
         output_paths,
@@ -321,6 +331,8 @@ fn write_workflow_outputs(
     workflow: &WorkflowContext<'_>,
     output_paths: &OutputPaths,
     rendered: &RenderedOutputs,
+    analysis: &super::DocumentAnalysis,
+    selected_template: &str,
 ) -> Result<(), String> {
     workflow.check_cancelled()?;
     workflow.emit_progress(
@@ -342,7 +354,7 @@ fn write_workflow_outputs(
             output_paths.svg_path.display()
         )
     })?;
-    write_docx(&output_paths.docx_path, &rendered.markdown)?;
+    write_docx(&output_paths.docx_path, analysis, selected_template)?;
     ensure_output_size(&output_paths.markdown_path, &workflow.limits)?;
     ensure_output_size(&output_paths.svg_path, &workflow.limits)?;
     ensure_output_size(&output_paths.docx_path, &workflow.limits)?;

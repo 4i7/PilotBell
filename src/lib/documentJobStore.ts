@@ -1,4 +1,8 @@
-import { type DocumentFailureKind, type DocumentJobMetadata } from "../domain/document";
+import {
+  normalizeDocumentTemplateId,
+  type DocumentFailureKind,
+  type DocumentJobMetadata,
+} from "../domain/document";
 
 const STORAGE_KEY = "pilotbell.documentJobs";
 const MAX_DOCUMENT_JOBS = 30;
@@ -30,7 +34,7 @@ function normalizeDocumentJobMetadata(value: unknown): DocumentJobMetadata | nul
     outputPath: typeof item.outputPath === "string" ? item.outputPath : null,
     timestamp: item.timestamp,
     status: item.status,
-    selectedTemplate: item.selectedTemplate,
+    selectedTemplate: normalizeDocumentTemplateId(item.selectedTemplate),
     providerId: typeof item.providerId === "string" ? item.providerId : null,
     errorSummary: typeof item.errorSummary === "string" ? item.errorSummary : null,
     warnings: Array.isArray(item.warnings)
@@ -82,7 +86,7 @@ function sanitizeJobForPersistence(job: DocumentJobMetadata): DocumentJobMetadat
     outputPath: null,
     timestamp: job.timestamp,
     status: job.status,
-    selectedTemplate: job.selectedTemplate,
+    selectedTemplate: normalizeDocumentTemplateId(job.selectedTemplate),
     providerId: null,
     errorSummary: job.errorSummary ?? null,
     warnings: job.warnings ?? [],

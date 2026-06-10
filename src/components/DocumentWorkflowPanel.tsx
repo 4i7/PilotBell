@@ -1,7 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
 
 import {
+  DOCUMENT_TEMPLATE_OPTIONS,
   documentFailureGuidance,
+  getDocumentTemplateLabel,
   type DocumentJobDraft,
   type DocumentJobMetadata,
   type DocumentJobProgress,
@@ -150,14 +152,6 @@ export function DocumentWorkflowPanel({
           Choose output
         </button>
         <select
-          value={draft.selectedTemplate}
-          onChange={(event) => setDraft({ ...draft, selectedTemplate: event.currentTarget.value })}
-        >
-          <option value="standard-review">Standard review report</option>
-          <option value="validation-summary">Validation summary</option>
-          <option value="executive-brief">Executive brief</option>
-        </select>
-        <select
           value={selectedProvider?.id ?? ""}
           onChange={() => undefined}
           disabled
@@ -169,6 +163,40 @@ export function DocumentWorkflowPanel({
               : "No provider selected"}
           </option>
         </select>
+      </div>
+
+      <div className="template-picker">
+        <div className="section-heading">
+          <div>
+            <div className="section-title">DOCX template</div>
+            <p className="helper">
+              Keep the report shape explicit before running the Rust workflow. The selected
+              template is stored with the job metadata and reused for later LLM wording review.
+            </p>
+          </div>
+          <span className="capability">{getDocumentTemplateLabel(draft.selectedTemplate)}</span>
+        </div>
+        <div className="template-option-list" role="list" aria-label="Available DOCX templates">
+          {DOCUMENT_TEMPLATE_OPTIONS.map((template) => {
+            const isActive = draft.selectedTemplate === template.id;
+            return (
+              <button
+                key={template.id}
+                type="button"
+                className={isActive ? "template-option active" : "template-option"}
+                onClick={() => setDraft({ ...draft, selectedTemplate: template.id })}
+                disabled={isRunning}
+              >
+                <span className="template-option-copy">
+                  <span className="template-option-title">{template.label}</span>
+                  <span className="template-option-description">{template.description}</span>
+                  <span className="template-option-highlights">{template.highlights}</span>
+                </span>
+                <span className="capability">{template.id}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <label className="checkbox-row">
@@ -216,7 +244,8 @@ export function DocumentWorkflowPanel({
         </p>
         {latestReviewableJob ? (
           <p className="context-preview-meta">
-            Ready source: {latestReviewableJob.fileName} / template {latestReviewableJob.selectedTemplate}
+            Ready source: {latestReviewableJob.fileName} / template{" "}
+            {getDocumentTemplateLabel(latestReviewableJob.selectedTemplate)}
           </p>
         ) : (
           <p className="helper">Run a successful local document workflow to prepare reviewable Markdown.</p>
@@ -295,6 +324,9 @@ export function DocumentWorkflowPanel({
                   <span className="capability">{job.status}</span>
                   <span className="status">{job.fileName}</span>
                 </div>
+                <p className="source-notes">
+                  Template: {getDocumentTemplateLabel(job.selectedTemplate)}
+                </p>
                 {job.outputPath ? <p className="source-path">{job.outputPath}</p> : null}
                 {job.errorSummary ? <p className="source-notes">{job.errorSummary}</p> : null}
                 {job.failureKind ? (
