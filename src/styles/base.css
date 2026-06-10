@@ -85,7 +85,7 @@ body,
 
 body {
   margin: 0;
-  min-width: 360px;
+  min-width: 420px;
   min-height: 100vh;
   color: var(--text-primary);
   background:

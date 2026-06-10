@@ -17,6 +17,60 @@ use shell::{
 };
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_window_state::{StateFlags, WindowExt};
+
+fn clear_invalid_main_window_state(app: &AppHandle) -> Result<bool, String> {
+    let state_path = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?
+        .join(".window-state.json");
+
+    let contents = match std::fs::read_to_string(&state_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+
+    let mut root =
+        serde_json::from_str::<serde_json::Value>(&contents).map_err(|error| error.to_string())?;
+
+    let Some(main) = root.get("main") else {
+        return Ok(false);
+    };
+
+    let width = main
+        .get("width")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+    let height = main
+        .get("height")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+
+    if width > 0 && height > 0 {
+        return Ok(false);
+    }
+
+    match root {
+        serde_json::Value::Object(ref mut object) => {
+            object.remove("main");
+
+            if object.is_empty() {
+                std::fs::remove_file(&state_path).map_err(|error| error.to_string())?;
+            } else {
+                let next =
+                    serde_json::to_string_pretty(object).map_err(|error| error.to_string())?;
+                std::fs::write(&state_path, next).map_err(|error| error.to_string())?;
+            }
+        }
+        _ => {
+            std::fs::remove_file(&state_path).map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(true)
+}
 
 #[tauri::command]
 async fn start_document_workflow(
@@ -58,9 +112,25 @@ pub fn run() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .skip_initial_state("main")
+                .skip_initial_state("settings")
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if window.label() != "settings" {
+                return;
+            }
+
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.set_always_on_top(false);
+                let _ = window.hide();
+            }
+        })
         .setup(move |app| {
             let state = app.state::<AppShellState>();
             let registration_result = app.global_shortcut().register(primary_shortcut);
@@ -96,6 +166,20 @@ pub fn run() {
                         });
                     }
                 }
+            }
+
+            if let Some(main_window) = app.get_webview_window("main") {
+                let cleared_invalid_state = clear_invalid_main_window_state(app.handle())?;
+                main_window
+                    .restore_state(StateFlags::all())
+                    .map_err(|error| error.to_string())?;
+
+                if cleared_invalid_state {
+                    main_window.center().map_err(|error| error.to_string())?;
+                }
+
+                main_window.show().map_err(|error| error.to_string())?;
+                main_window.set_focus().map_err(|error| error.to_string())?;
             }
 
             Ok(())

@@ -3,6 +3,7 @@ import type { ProviderConfig } from "../domain/provider";
 import type { ProviderHealthRecord, ProviderReadiness } from "../lib/providerHealthStore";
 
 type ProviderSelectorProps = {
+  className?: string;
   selectedProvider: ProviderConfig | null;
   selectedProviderId: string;
   providers: ProviderConfig[];
@@ -19,6 +20,7 @@ type ProviderSelectorProps = {
 };
 
 export function ProviderSelector({
+  className,
   selectedProvider,
   selectedProviderId,
   providers,
@@ -34,7 +36,10 @@ export function ProviderSelector({
   ChevronDownIcon,
 }: ProviderSelectorProps) {
   return (
-    <div className="provider-switcher" ref={providerMenuRef}>
+    <div
+      className={["provider-switcher", className].filter(Boolean).join(" ")}
+      ref={providerMenuRef}
+    >
       <button
         type="button"
         className="provider-switcher-button"

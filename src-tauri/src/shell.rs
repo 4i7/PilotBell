@@ -93,33 +93,52 @@ fn normalize_settings_section(section: Option<String>) -> String {
     }
 }
 
+fn show_settings_window(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    section: &str,
+) -> Result<(), String> {
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.set_always_on_top(false);
+    }
+
+    window
+        .set_always_on_top(true)
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    app.emit_to("settings", SETTINGS_SECTION_EVENT, section)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub(crate) fn open_settings_window(app: AppHandle, section: Option<String>) -> Result<(), String> {
     let section = normalize_settings_section(section);
 
     if let Some(window) = app.get_webview_window("settings") {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        app.emit_to("settings", SETTINGS_SECTION_EVENT, &section)
-            .map_err(|error| error.to_string())?;
-        return Ok(());
+        return show_settings_window(&app, &window, &section);
     }
 
-    // Keep the secondary window state in the fragment so the app shell asset path stays
-    // `index.html` in packaged builds while React can still choose the settings view.
-    WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        WebviewUrl::App(format!("index.html#view=settings&section={section}").into()),
-    )
-    .title("PilotBell Settings")
-    .inner_size(760.0, 820.0)
-    .min_inner_size(420.0, 520.0)
-    .center()
-    .decorations(false)
-    .resizable(true)
-    .focused(true)
-    .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.set_always_on_top(false);
+    }
+
+    let section_script = serde_json::to_string(&section).map_err(|error| error.to_string())?;
+    let initialization_script = format!(
+        "window.__PILOTBELL_SETTINGS_WINDOW__ = true; window.__PILOTBELL_SETTINGS_SECTION__ = {section_script};"
+    );
+
+    WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("index.html".into()))
+        .initialization_script(initialization_script)
+        .title("PilotBell Settings")
+        .inner_size(760.0, 820.0)
+        .min_inner_size(420.0, 520.0)
+        .center()
+        .decorations(false)
+        .resizable(true)
+        .always_on_top(true)
+        .focused(true)
+        .build()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
