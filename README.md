@@ -73,11 +73,11 @@ PilotBell currently exposes three explicit DOCX report templates in the document
 - `detailed-analysis` - fuller report with document profile, validation walkthrough, and preview evidence
 - `data-quality-review` - validation-focused report with warnings and recommended follow-up actions
 
-The template contract lives in [`src-tauri/src/document/word.rs`](/C:/Users/4i7/Claude/Projects/Dreadnought/apps/pilotbell/src-tauri/src/document/word.rs). To add a new template:
+The template contract lives in [`src-tauri/src/document/word.rs`](./src-tauri/src/document/word.rs). To add a new template:
 
 1. Add a new `DocumentTemplate` variant plus its canonical `id()` and `label()`.
 2. Implement the section layout in a dedicated `build_*` helper that writes DOCX content directly from `DocumentAnalysis`.
-3. Add the same template ID and copy to `DOCUMENT_TEMPLATE_OPTIONS` in [`src/domain/document.ts`](/C:/Users/4i7/Claude/Projects/Dreadnought/apps/pilotbell/src/domain/document.ts) so the React workflow panel exposes the new choice explicitly.
+3. Add the same template ID and copy to `DOCUMENT_TEMPLATE_OPTIONS` in [`src/domain/document.ts`](./src/domain/document.ts) so the React workflow panel exposes the new choice explicitly.
 4. Extend the Rust DOCX generation test matrix in `word.rs` so the new template is exercised against both PDF and Excel fixture analyses.
 
 ## Storage Policy
