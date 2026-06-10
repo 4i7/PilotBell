@@ -14,6 +14,7 @@ import {
   type DocumentWorkflowResult,
   isDocumentJobDraftReady,
   makeDocumentJobId,
+  normalizeDocumentTemplateId,
 } from "../domain/document";
 import {
   clearDeprecatedLocalSourceIndex,
@@ -102,7 +103,7 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
           jobId,
           inputPath: draft.inputPath.trim(),
           outputDir: draft.outputDir.trim(),
-          selectedTemplate: draft.selectedTemplate.trim(),
+          selectedTemplate: normalizeDocumentTemplateId(draft.selectedTemplate),
           overwrite: draft.overwrite,
         },
       });
@@ -132,7 +133,7 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
         outputPath: draft.outputDir.trim(),
         timestamp: new Date().toISOString(),
         status: "failed",
-        selectedTemplate: draft.selectedTemplate.trim(),
+        selectedTemplate: normalizeDocumentTemplateId(draft.selectedTemplate),
         errorSummary,
         warnings: [],
         failureKind,

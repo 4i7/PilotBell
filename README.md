@@ -65,6 +65,21 @@ The Rust workflow currently uses:
 - `docx-rs` for Word report generation
 - `quick-xml` for SVG validation before preview/output
 
+### DOCX Templates
+
+PilotBell currently exposes three explicit DOCX report templates in the document workflow UI:
+
+- `summary-report` - short handoff report with top findings and a compact preview excerpt
+- `detailed-analysis` - fuller report with document profile, validation walkthrough, and preview evidence
+- `data-quality-review` - validation-focused report with warnings and recommended follow-up actions
+
+The template contract lives in [`src-tauri/src/document/word.rs`](/C:/Users/4i7/Claude/Projects/Dreadnought/apps/pilotbell/src-tauri/src/document/word.rs). To add a new template:
+
+1. Add a new `DocumentTemplate` variant plus its canonical `id()` and `label()`.
+2. Implement the section layout in a dedicated `build_*` helper that writes DOCX content directly from `DocumentAnalysis`.
+3. Add the same template ID and copy to `DOCUMENT_TEMPLATE_OPTIONS` in [`src/domain/document.ts`](/C:/Users/4i7/Claude/Projects/Dreadnought/apps/pilotbell/src/domain/document.ts) so the React workflow panel exposes the new choice explicitly.
+4. Extend the Rust DOCX generation test matrix in `word.rs` so the new template is exercised against both PDF and Excel fixture analyses.
+
 ## Storage Policy
 
 Allowed browser storage is limited to lightweight metadata:
@@ -163,4 +178,3 @@ For the current desktop validation path, use a Windows host with `stable-msvc`.
 
 - Expand Excel validation summaries for data quality review without evaluating formulas.
 - Add UI-level coverage for provider migration scrub, document private mode, and send-review flows.
-- Add more DOCX templates for repeatable report formats.
