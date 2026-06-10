@@ -59,7 +59,12 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
           ...current,
           [event.payload.jobId]: event.payload,
         }));
-        setStatusMessage(event.payload.message);
+        const warnings = event.payload.warnings ?? [];
+        setStatusMessage(
+          warnings.length > 0
+            ? `${event.payload.message} ${warnings.join(" ")}`
+            : event.payload.message,
+        );
       });
     }
 

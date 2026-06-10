@@ -27,6 +27,7 @@ export type DocumentJobProgress = {
   current: number;
   total: number;
   message: string;
+  warnings?: string[];
 };
 
 export type DocumentJobMetadata = {
