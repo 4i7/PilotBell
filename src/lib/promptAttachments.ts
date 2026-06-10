@@ -4,6 +4,7 @@ import {
   providerIsCloud,
   type ProviderConfig,
 } from "../domain/provider";
+import { getDocumentTemplateLabel } from "../domain/document";
 import type { AttachedPromptFile } from "../domain/prompt";
 import type {
   PromptContextPreview,
@@ -151,13 +152,14 @@ function buildDocumentPrompt(context: DocumentReviewContext) {
   const includedMarkdown = normalizedMarkdown.slice(0, MAX_DOCUMENT_CONTEXT_CHARS);
   const textTruncated = normalizedMarkdown.length > MAX_DOCUMENT_CONTEXT_CHARS;
   const omittedCharCount = Math.max(0, normalizedMarkdown.length - includedMarkdown.length);
+  const templateLabel = getDocumentTemplateLabel(context.selectedTemplate);
   const promptSections = [
     "You are revising a PilotBell-generated Markdown review report for clarity and final wording.",
     "Preserve all factual content, headings, bullet structure, warnings, uncertainty, and explicit limitations from the source.",
     "Do not invent facts, figures, conclusions, or source details that are not present in the provided Markdown.",
     "Return Markdown only.",
     "",
-    `Selected template: ${context.selectedTemplate}`,
+    `Selected template: ${templateLabel} (${context.selectedTemplate})`,
     `Source file: ${context.fileName}`,
     "",
     "PilotBell-generated Markdown review draft:",

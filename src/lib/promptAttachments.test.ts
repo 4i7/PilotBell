@@ -42,7 +42,7 @@ describe("prompt context review signals", () => {
       {
         jobId: "document-1",
         fileName: "Q2-report.pdf",
-        selectedTemplate: "standard-review",
+        selectedTemplate: "summary-report",
         markdownContent: `# Review\n\n${"A".repeat(12_500)}`,
       },
       {

@@ -77,10 +77,68 @@ export type ReviewableDocumentJob = {
 };
 
 export const DOCUMENT_JOB_PROGRESS_EVENT = "pilotbell://document-job-progress";
-export const DEFAULT_DOCUMENT_TEMPLATE = "standard-review";
+export type DocumentTemplateId =
+  | "summary-report"
+  | "detailed-analysis"
+  | "data-quality-review";
+
+export type DocumentTemplateOption = {
+  id: DocumentTemplateId;
+  label: string;
+  description: string;
+  highlights: string;
+};
+
+export const DOCUMENT_TEMPLATE_OPTIONS: DocumentTemplateOption[] = [
+  {
+    id: "summary-report",
+    label: "Summary report",
+    description: "Short review for quick handoff and top-level status checks.",
+    highlights: "Lead with source details, high-signal findings, and a compact preview excerpt.",
+  },
+  {
+    id: "detailed-analysis",
+    label: "Detailed analysis",
+    description: "Longer report for close reading of extracted facts and review notes.",
+    highlights: "Expands document profile, validation walkthrough, and preview evidence.",
+  },
+  {
+    id: "data-quality-review",
+    label: "Data-quality review",
+    description: "Review format centered on validation, gaps, and follow-up actions.",
+    highlights: "Focuses on checks reviewed, warnings, and recommended next steps.",
+  },
+];
+
+const LEGACY_DOCUMENT_TEMPLATE_ALIASES: Record<string, DocumentTemplateId> = {
+  "standard-review": "summary-report",
+  "validation-summary": "data-quality-review",
+  "executive-brief": "summary-report",
+};
+
+export const DEFAULT_DOCUMENT_TEMPLATE: DocumentTemplateId = "summary-report";
 
 export function makeDocumentJobId() {
   return `document-${crypto.randomUUID()}`;
+}
+
+export function normalizeDocumentTemplateId(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed in LEGACY_DOCUMENT_TEMPLATE_ALIASES) {
+    return LEGACY_DOCUMENT_TEMPLATE_ALIASES[trimmed] ?? DEFAULT_DOCUMENT_TEMPLATE;
+  }
+
+  const option = DOCUMENT_TEMPLATE_OPTIONS.find((item) => item.id === trimmed);
+  return option?.id ?? trimmed;
+}
+
+export function getDocumentTemplateOption(value: string) {
+  const normalized = normalizeDocumentTemplateId(value);
+  return DOCUMENT_TEMPLATE_OPTIONS.find((option) => option.id === normalized) ?? null;
+}
+
+export function getDocumentTemplateLabel(value: string) {
+  return getDocumentTemplateOption(value)?.label ?? value;
 }
 
 export function isDocumentJobDraftReady(draft: DocumentJobDraft) {
