@@ -261,6 +261,52 @@
   transition: width 180ms ease;
 }
 
+.progress-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border-soft));
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--warning-soft) 72%, var(--bg-elevated));
+  color: var(--warning);
+}
+
+.progress-warnings-header,
+.progress-warning-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.progress-warnings-icon,
+.progress-warning-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.progress-warnings-icon svg,
+.progress-warning-item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.progress-warning-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.progress-warning-item {
+  color: var(--text-primary);
+  font-size: var(--font-size-label);
+}
+
 .section-title {
   color: var(--text-secondary);
   font-size: var(--font-size-label);
