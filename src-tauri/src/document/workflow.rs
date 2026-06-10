@@ -48,6 +48,25 @@ impl<'a> WorkflowContext<'a> {
         emit_progress(self.app, &self.job_id, phase, current, total, message);
     }
 
+    fn emit_progress_with_warnings(
+        &self,
+        phase: DocumentJobPhase,
+        current: u32,
+        total: u32,
+        message: impl Into<String>,
+        warnings: Vec<String>,
+    ) {
+        emit_progress_with_warnings(
+            self.app,
+            &self.job_id,
+            phase,
+            current,
+            total,
+            message,
+            warnings,
+        );
+    }
+
     fn fail<T>(&self, message: String) -> Result<T, String> {
         fail_job(self.app, &self.job_id, message)
     }
@@ -239,7 +258,17 @@ fn analyze_document_input(
                 10,
                 "Parsing PDF structure and page metadata.",
             );
-            analyze_pdf(&prepared.input_path, &workflow.limits)
+            let analysis = analyze_pdf(&prepared.input_path, &workflow.limits)?;
+            if !analysis.warnings.is_empty() {
+                workflow.emit_progress_with_warnings(
+                    DocumentJobPhase::ParsingPdf,
+                    3,
+                    10,
+                    "PDF text extraction completed with review warnings.",
+                    analysis.warnings.clone(),
+                );
+            }
+            Ok(analysis)
         }
         WorkflowInputKind::Spreadsheet => {
             workflow.emit_progress(
@@ -354,6 +383,18 @@ fn emit_progress(
     total: u32,
     message: impl Into<String>,
 ) {
+    emit_progress_with_warnings(app, job_id, phase, current, total, message, Vec::new());
+}
+
+fn emit_progress_with_warnings(
+    app: &AppHandle,
+    job_id: &str,
+    phase: DocumentJobPhase,
+    current: u32,
+    total: u32,
+    message: impl Into<String>,
+    warnings: Vec<String>,
+) {
     let _ = app.emit(
         DOCUMENT_JOB_PROGRESS_EVENT,
         DocumentJobProgress {
@@ -362,6 +403,7 @@ fn emit_progress(
             current,
             total,
             message: message.into(),
+            warnings,
         },
     );
 }

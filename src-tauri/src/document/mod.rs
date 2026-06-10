@@ -75,6 +75,7 @@ pub struct DocumentJobProgress {
     pub current: u32,
     pub total: u32,
     pub message: String,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Serialize)]
