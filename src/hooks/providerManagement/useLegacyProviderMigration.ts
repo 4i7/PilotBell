@@ -66,11 +66,17 @@ export function useLegacyProviderMigration({
         );
         return;
       }
-      setProviderStatus({
-        tone: "warning",
-        message: browserPreviewMessage,
+      setProviderStatus((current) => {
+        if (current?.tone === "warning" && current.message === browserPreviewMessage) {
+          return current;
+        }
+
+        return {
+          tone: "warning",
+          message: browserPreviewMessage,
+        };
       });
-      setIsMigratingProviders(false);
+      setIsMigratingProviders((current) => (current ? false : current));
       return;
     }
 

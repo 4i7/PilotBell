@@ -119,3 +119,32 @@ export function CloseIcon(props: SVGProps<SVGSVGElement>) {
     </IconBase>
   );
 }
+
+export function InfoIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11.5v4" />
+      <path d="M12 8.2h.01" />
+    </IconBase>
+  );
+}
+
+export function CheckCircleIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="m8.4 12.2l2.2 2.2l5-5" />
+    </IconBase>
+  );
+}
+
+export function AlertTriangleIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M10.5 4.5h3L21 18.5H3L10.5 4.5Z" />
+      <path d="M12 9.4v4" />
+      <path d="M12 16.2h.01" />
+    </IconBase>
+  );
+}

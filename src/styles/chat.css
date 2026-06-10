@@ -2,7 +2,7 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  padding: 18px;
+  padding: var(--space-4);
   overflow: hidden;
 }
 
@@ -11,7 +11,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .chat-surface.empty-session {
@@ -24,7 +24,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 12px 4px;
+  padding: var(--space-3) var(--space-3) var(--space-1);
 }
 
 .chat-empty-hint {
@@ -39,23 +39,23 @@
 
 .chat-empty-copy h2 {
   margin: 0;
-  font-size: clamp(1.6rem, 3vw, 2.3rem);
+  font-size: 2rem;
   line-height: 1.12;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 .chat-empty-copy p:last-child {
-  margin: 12px auto 0;
+  margin: var(--space-3) auto 0;
   max-width: 640px;
   color: var(--text-secondary);
 }
 
 .eyebrow {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2);
   color: var(--text-muted);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-label);
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -66,14 +66,14 @@
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 8px 2px 0;
+  gap: var(--space-6);
+  padding: var(--space-2) var(--space-1) 0;
 }
 
 .chat-turn {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .bubble-row {
@@ -90,8 +90,8 @@
 
 .chat-bubble {
   max-width: min(82%, 760px);
-  padding: 16px 18px;
-  border-radius: 22px;
+  padding: var(--space-4);
+  border-radius: var(--radius-shell);
   border: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
   box-shadow: 0 12px 30px rgba(15, 18, 28, 0.08);
@@ -121,7 +121,7 @@
 
 .bubble-meta {
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--font-size-caption);
 }
 
 .user-meta {
@@ -130,12 +130,12 @@
 
 .bubble-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .ghost-action {
   min-width: 0;
-  padding: 7px 11px;
+  padding: var(--space-2) var(--space-3);
   border-radius: 999px;
   color: var(--text-secondary);
   background: transparent;
