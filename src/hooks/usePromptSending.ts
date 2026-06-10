@@ -52,17 +52,8 @@ function makeSessionEntryId() {
 
 function shouldGatePromptSend(
   preview: PromptContextPreview,
-  options: PromptInputPreferences,
 ) {
-  if (preview.requiresExplicitOptIn && options.reviewAdvancedEndpointsBeforeSend) {
-    return true;
-  }
-
-  if (preview.requiresCloudReview && options.reviewCloudBeforeSend) {
-    return true;
-  }
-
-  return preview.attachments.length > 0;
+  return preview.requiresExplicitOptIn || preview.requiresCloudReview || preview.attachments.length > 0;
 }
 
 export function usePromptSending({
@@ -213,7 +204,7 @@ export function usePromptSending({
     }
 
     const preview = buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
-    if (shouldGatePromptSend(preview, options)) {
+    if (shouldGatePromptSend(preview)) {
       setPendingReview({
         preview,
         prompt: targetPrompt,

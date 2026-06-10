@@ -107,22 +107,53 @@ export function officialEndpointForProvider(kind: ProviderKind) {
   }
 }
 
-export function isLoopbackEndpoint(endpoint: string) {
+function parseProviderEndpoint(endpoint: string): URL | null {
   try {
-    const url = new URL(endpoint);
-    const host = url.hostname.toLowerCase();
-    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+    return new URL(endpoint.trim());
   } catch {
-    return false;
+    return null;
   }
 }
 
-export function classifyProviderEndpoint(kind: ProviderKind, endpoint: string): ProviderEndpointRisk {
-  const normalizedEndpoint = endpoint.trim().replace(/\/+$/, "").toLowerCase();
-  const official = officialEndpointForProvider(kind).replace(/\/+$/, "").toLowerCase();
+function endpointHasCredentials(url: URL) {
+  return url.username !== "" || url.password !== "";
+}
 
+function normalizeEndpointPath(url: URL) {
+  return url.pathname.replace(/\/+$/, "") || "/";
+}
+
+function endpointMatchesOfficial(endpoint: string, officialEndpoint: string) {
+  const url = parseProviderEndpoint(endpoint);
+  const official = parseProviderEndpoint(officialEndpoint);
+
+  if (!url || !official || endpointHasCredentials(url)) {
+    return false;
+  }
+
+  return (
+    url.protocol === official.protocol &&
+    url.hostname.toLowerCase() === official.hostname.toLowerCase() &&
+    url.port === official.port &&
+    normalizeEndpointPath(url).toLowerCase() === normalizeEndpointPath(official).toLowerCase() &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}
+
+export function isLoopbackEndpoint(endpoint: string) {
+  const url = parseProviderEndpoint(endpoint);
+  if (!url || endpointHasCredentials(url)) {
+    return false;
+  }
+
+  const host = url.hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
+
+export function classifyProviderEndpoint(kind: ProviderKind, endpoint: string): ProviderEndpointRisk {
   if (providerIsCloud(kind)) {
-    if (normalizedEndpoint === official) {
+    if (endpointMatchesOfficial(endpoint, officialEndpointForProvider(kind))) {
       return {
         isAdvanced: false,
         tone: "neutral",

@@ -93,6 +93,44 @@ fn validate_provider_accepts_custom_hosted_endpoint_with_advanced_mode() {
 }
 
 #[test]
+fn validate_provider_rejects_hosted_endpoint_parser_edge_cases_without_advanced_mode() {
+    for endpoint in [
+        "https://api.openai.com./v1/responses",
+        "https://api.openai.com/v1/responses?redirect=https://evil.example",
+        "https://api.openai.com/v1/responses#fragment",
+    ] {
+        let mut provider = sample_provider();
+        provider.endpoint = endpoint.into();
+
+        let error = validate_provider(&provider)
+            .expect_err("hosted endpoint edge case should require advanced mode");
+        assert!(matches!(error.kind, ProviderErrorKind::Validation));
+        assert!(error.message.contains("advanced mode"));
+    }
+}
+
+#[test]
+fn validate_provider_rejects_hosted_endpoint_with_embedded_credentials() {
+    let mut provider = sample_provider();
+    provider.endpoint = "https://user:pass@api.openai.com/v1/responses".into();
+    provider.advanced_endpoint = true;
+
+    let error = validate_provider(&provider).expect_err("embedded credentials should be rejected");
+    assert!(matches!(error.kind, ProviderErrorKind::Validation));
+    assert!(error.message.contains("embedded credentials"));
+}
+
+#[test]
+fn validate_provider_rejects_local_endpoint_with_embedded_credentials() {
+    let mut provider = sample_ollama_provider();
+    provider.endpoint = "http://user:pass@localhost:11434/api/generate".into();
+
+    let error = validate_provider(&provider).expect_err("embedded credentials should be rejected");
+    assert!(matches!(error.kind, ProviderErrorKind::Validation));
+    assert!(error.message.contains("embedded credentials"));
+}
+
+#[test]
 fn validate_provider_accepts_ollama_without_secret() {
     assert!(validate_provider(&sample_ollama_provider()).is_ok());
 }
@@ -157,6 +195,26 @@ fn build_llama_cpp_payload_uses_chat_completions_shape() {
     assert_eq!(payload["messages"][0]["role"], "user");
     assert_eq!(payload["messages"][0]["content"], "hello");
     assert_eq!(payload["stream"], false);
+}
+
+#[test]
+fn redact_secret_from_error_removes_secret_from_message_and_details() {
+    let error = ProviderCommandError::new(
+        ProviderErrorKind::Provider,
+        "Provider echoed sk-test-secret in the message",
+        false,
+    )
+    .with_details("details included Bearer sk-test-secret");
+
+    let redacted = redact_secret_from_error(error, Some("sk-test-secret"));
+
+    assert!(!redacted.message.contains("sk-test-secret"));
+    assert!(!redacted
+        .details
+        .as_deref()
+        .unwrap_or_default()
+        .contains("sk-test-secret"));
+    assert!(redacted.message.contains("[redacted provider secret]"));
 }
 
 #[test]

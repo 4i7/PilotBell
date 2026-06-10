@@ -9,6 +9,7 @@ use super::responses::{
 use super::secrets::read_provider_secret;
 use super::types::{AssistantReply, ProviderCommandError, ProviderConfig, ProviderErrorKind};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::redirect::Policy;
 use reqwest::Url;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -162,8 +163,32 @@ fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderCommandError> {
     })
 }
 
-fn normalized_endpoint(endpoint: &str) -> String {
-    endpoint.trim().trim_end_matches('/').to_ascii_lowercase()
+fn endpoint_has_credentials(url: &Url) -> bool {
+    !url.username().is_empty() || url.password().is_some()
+}
+
+fn normalized_path(url: &Url) -> String {
+    let path = url.path().trim_end_matches('/');
+    if path.is_empty() {
+        "/".into()
+    } else {
+        path.to_ascii_lowercase()
+    }
+}
+
+fn endpoint_matches_official(endpoint: &Url, official_endpoint: &str) -> bool {
+    let Ok(official) = Url::parse(official_endpoint) else {
+        return false;
+    };
+
+    !endpoint_has_credentials(endpoint)
+        && endpoint.scheme() == official.scheme()
+        && endpoint.host_str().map(str::to_ascii_lowercase)
+            == official.host_str().map(str::to_ascii_lowercase)
+        && endpoint.port_or_known_default() == official.port_or_known_default()
+        && normalized_path(endpoint) == normalized_path(&official)
+        && endpoint.query().is_none()
+        && endpoint.fragment().is_none()
 }
 
 fn validate_hosted_endpoint(
@@ -180,7 +205,15 @@ fn validate_hosted_endpoint(
         ));
     }
 
-    if normalized_endpoint(&provider.endpoint) == normalized_endpoint(official_endpoint) {
+    if endpoint_has_credentials(&parsed) {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            format!("{label} endpoint must not include embedded credentials."),
+            false,
+        ));
+    }
+
+    if endpoint_matches_official(&parsed, official_endpoint) {
         return Ok(());
     }
 
@@ -208,6 +241,14 @@ fn validate_local_endpoint(
         ));
     }
 
+    if endpoint_has_credentials(&parsed) {
+        return Err(ProviderCommandError::new(
+            ProviderErrorKind::Validation,
+            format!("{label} endpoint must not include embedded credentials."),
+            false,
+        ));
+    }
+
     if is_loopback_endpoint(&parsed) {
         return Ok(());
     }
@@ -224,6 +265,10 @@ fn validate_local_endpoint(
 }
 
 fn is_loopback_endpoint(url: &Url) -> bool {
+    if endpoint_has_credentials(url) {
+        return false;
+    }
+
     matches!(
         url.host_str()
             .map(|host| host.to_ascii_lowercase())
@@ -262,6 +307,25 @@ fn prepare_local_request(
     request
 }
 
+fn redact_secret_from_text(text: &str, api_key: Option<&str>) -> String {
+    let Some(api_key) = api_key.map(str::trim).filter(|api_key| !api_key.is_empty()) else {
+        return text.into();
+    };
+
+    text.replace(api_key, "[redacted provider secret]")
+}
+
+fn redact_secret_from_error(
+    mut error: ProviderCommandError,
+    api_key: Option<&str>,
+) -> ProviderCommandError {
+    error.message = redact_secret_from_text(&error.message, api_key);
+    error.details = error
+        .details
+        .map(|details| redact_secret_from_text(&details, api_key));
+    error
+}
+
 pub(super) async fn call_provider(
     prompt: &str,
     provider: ProviderConfig,
@@ -285,6 +349,7 @@ pub(super) async fn call_provider(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
+        .redirect(Policy::none())
         .build()
         .map_err(|error| {
             ProviderCommandError::new(
@@ -302,7 +367,7 @@ pub(super) async fn call_provider(
     request = (adapter.prepare_request)(request, api_key.as_deref());
 
     let response = request.send().await.map_err(|error| {
-        if error.is_timeout() {
+        let provider_error = if error.is_timeout() {
             ProviderCommandError::new(
                 ProviderErrorKind::Timeout,
                 "The provider request timed out after 90 seconds.",
@@ -314,7 +379,8 @@ pub(super) async fn call_provider(
                 format!("Network error: {error}"),
                 true,
             )
-        }
+        };
+        redact_secret_from_error(provider_error, api_key.as_deref())
     })?;
 
     let status = response.status();
@@ -344,7 +410,7 @@ pub(super) async fn call_provider(
                 if let Some(details) = details {
                     error = error.with_details(details);
                 }
-                return Err(error);
+                return Err(redact_secret_from_error(error, api_key.as_deref()));
             }
         }
 
@@ -357,22 +423,24 @@ pub(super) async fn call_provider(
         if let Some(details) = details {
             error = error.with_details(details);
         }
-        return Err(error);
+        return Err(redact_secret_from_error(error, api_key.as_deref()));
     }
 
     let parsed = parsed.map_err(|_| {
         let details = preview_text(&raw)
             .map(Cow::Owned)
             .unwrap_or_else(|| Cow::Borrowed("Response body could not be parsed as JSON."));
-        ProviderCommandError::new(
+        let error = ProviderCommandError::new(
             ProviderErrorKind::ResponseFormat,
             "Unexpected provider response format.",
             false,
         )
-        .with_details(details)
+        .with_details(details);
+        redact_secret_from_error(error, api_key.as_deref())
     })?;
 
-    let content = (adapter.parse_response)(&raw, parsed)?;
+    let content = (adapter.parse_response)(&raw, parsed)
+        .map_err(|error| redact_secret_from_error(error, api_key.as_deref()))?;
 
     Ok(AssistantReply {
         content,
