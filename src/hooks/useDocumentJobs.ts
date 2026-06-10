@@ -55,16 +55,14 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
         if (disposed) {
           return;
         }
-        setProgress((current) => ({
-          ...current,
-          [event.payload.jobId]: event.payload,
-        }));
-        const warnings = event.payload.warnings ?? [];
-        setStatusMessage(
-          warnings.length > 0
-            ? `${event.payload.message} ${warnings.join(" ")}`
-            : event.payload.message,
-        );
+        setProgress((current) => {
+          const previous = current[event.payload.jobId];
+          return {
+            ...current,
+            [event.payload.jobId]: mergeProgressUpdate(previous, event.payload),
+          };
+        });
+        setStatusMessage(event.payload.message);
       });
     }
 
@@ -108,15 +106,11 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
       });
       const completedJob: DocumentJobMetadata = {
         ...result.metadata,
-        warnings: result.warnings,
+        warnings: uniqueWarnings(result.warnings),
         failureKind: null,
       };
       persistJobs([completedJob, ...jobs]);
-      setStatusMessage(
-        result.warnings.length > 0
-          ? `${result.metadata.fileName} completed with warnings: ${result.warnings.join(" ")}`
-          : `${result.metadata.fileName} completed.`,
-      );
+      setStatusMessage(`${result.metadata.fileName} completed.`);
     } catch (error) {
       const errorSummary = error instanceof Error ? error.message : String(error);
       const failureKind = classifyDocumentFailure(errorSummary);
@@ -181,4 +175,18 @@ export function useDocumentJobs(isTauriRuntime: boolean, privateMode: boolean) {
 function fileNameFromPath(path: string) {
   const normalized = path.replace(/\\/g, "/");
   return normalized.split("/").filter(Boolean).pop() ?? "document";
+}
+
+function mergeProgressUpdate(
+  previous: DocumentJobProgress | undefined,
+  next: DocumentJobProgress,
+): DocumentJobProgress {
+  return {
+    ...next,
+    warnings: uniqueWarnings([...(previous?.warnings ?? []), ...(next.warnings ?? [])]),
+  };
+}
+
+function uniqueWarnings(warnings: string[]) {
+  return warnings.filter((warning, index) => warnings.indexOf(warning) === index);
 }

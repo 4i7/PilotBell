@@ -17,6 +17,7 @@ export function ProgressPanel({ progress, message, isRunning, failure, onCancel 
   const current = progress ? Math.min(progress.current, total) : 0;
   const percent = Math.round((current / total) * 100);
   const guidance = failure ? documentFailureGuidance(failure.kind) : null;
+  const warnings = uniqueWarnings(progress?.warnings ?? []);
   const statusTone = failure
     ? "error"
     : progress?.phase === "completed"
@@ -54,6 +55,26 @@ export function ProgressPanel({ progress, message, isRunning, failure, onCancel 
           Cancel job
         </button>
       </div>
+      {warnings.length > 0 ? (
+        <div className="progress-warnings" aria-live="polite">
+          <div className="progress-warnings-header">
+            <span className="progress-warnings-icon" aria-hidden="true">
+              <AlertTriangleIcon />
+            </span>
+            <span className="status">Extraction warnings</span>
+          </div>
+          <ul className="progress-warning-list">
+            {warnings.map((warning) => (
+              <li key={warning} className="progress-warning-item">
+                <span className="progress-warning-item-icon" aria-hidden="true">
+                  <AlertTriangleIcon />
+                </span>
+                <span>{warning}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {failure ? (
         <div className="notice notice-error">
           <div>
@@ -65,4 +86,8 @@ export function ProgressPanel({ progress, message, isRunning, failure, onCancel 
       ) : null}
     </div>
   );
+}
+
+function uniqueWarnings(warnings: string[]) {
+  return warnings.filter((warning, index) => warnings.indexOf(warning) === index);
 }

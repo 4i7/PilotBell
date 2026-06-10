@@ -161,8 +161,6 @@ For the current desktop validation path, use a Windows host with `stable-msvc`.
 
 ## Next Exploration Hooks
 
-- Improve PDF text extraction quality while keeping extracted text temporary.
 - Expand Excel validation summaries for data quality review without evaluating formulas.
 - Add UI-level coverage for provider migration scrub, document private mode, and send-review flows.
 - Add more DOCX templates for repeatable report formats.
-- Review endpoint handling and secret flows with a security-focused pass.
