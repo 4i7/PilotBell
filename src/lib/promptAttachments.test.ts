@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildPromptContextPreview } from "./promptAttachments";
+import { buildDocumentContextPreview, buildPromptContextPreview } from "./promptAttachments";
 
 describe("prompt context review signals", () => {
   it("requires review for cloud sends even without attachments", () => {
@@ -18,6 +18,7 @@ describe("prompt context review signals", () => {
     expect(preview.requiresReview).toBe(true);
     expect(preview.requiresExplicitOptIn).toBe(false);
     expect(preview.secretWillBeUsed).toBe(true);
+    expect(preview.contextItems).toHaveLength(0);
   });
 
   it("requires explicit opt-in for advanced endpoints", () => {
@@ -34,5 +35,35 @@ describe("prompt context review signals", () => {
     expect(preview.requiresExplicitOptIn).toBe(true);
     expect(preview.requiresReview).toBe(true);
     expect(preview.providerHost).toBe("proxy.example.com");
+  });
+
+  it("shows document-context truncation when report wording payload is shortened", () => {
+    const preview = buildDocumentContextPreview(
+      {
+        jobId: "document-1",
+        fileName: "Q2-report.pdf",
+        selectedTemplate: "standard-review",
+        markdownContent: `# Review\n\n${"A".repeat(12_500)}`,
+      },
+      {
+        id: "provider-openai",
+        kind: "openai-responses",
+        name: "OpenAI",
+        endpoint: "https://api.openai.com/v1/responses",
+        model: "gpt-4.1-mini",
+        hasSecret: true,
+        advancedEndpoint: false,
+      },
+    );
+
+    expect(preview.title).toBe("Document context review");
+    expect(preview.contextTitle).toBe("Document context");
+    expect(preview.requiresCloudReview).toBe(true);
+    expect(preview.contextItems).toHaveLength(1);
+    expect(preview.contextItems[0]?.textTruncated).toBe(true);
+    expect(preview.contextItems[0]?.includedCharCount).toBe(12_000);
+    expect(preview.warnings.some((warning) => warning.includes("truncated"))).toBe(true);
+    expect(preview.preparedPrompt).toContain("PilotBell-generated Markdown review draft:");
+    expect(preview.helperText).toContain("same helper");
   });
 });

@@ -7,12 +7,20 @@ import {
 import type { AttachedPromptFile } from "../domain/prompt";
 import type {
   PromptContextPreview,
-  PromptContextPreviewAttachment,
+  PromptContextPreviewItem,
 } from "../domain/prompt";
 import { formatBytes } from "./formatters";
 
 const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
 const MAX_ATTACHMENT_TEXT_CHARS = 8_000;
+const MAX_DOCUMENT_CONTEXT_CHARS = 12_000;
+
+export type DocumentReviewContext = {
+  jobId: string;
+  fileName: string;
+  selectedTemplate: string;
+  markdownContent: string;
+};
 
 function makeAttachmentId() {
   return `attachment-${crypto.randomUUID()}`;
@@ -43,16 +51,50 @@ export function buildPromptWithAttachments(prompt: string, files: AttachedPrompt
   };
 }
 
-function describeAttachment(file: AttachedPromptFile): PromptContextPreviewAttachment {
+function describeAttachment(file: AttachedPromptFile): PromptContextPreviewItem {
   return {
     id: file.id,
     name: file.name,
-    size: file.size,
-    type: file.type,
+    detail: `${formatBytes(file.size)}${file.type ? ` / ${file.type}` : ""}`,
     excerpt: file.textContent ?? null,
     note: file.note ?? null,
     textTruncated: file.textTruncated ?? false,
     includedCharCount: file.textContent?.length ?? 0,
+  };
+}
+
+function buildPreviewWarnings(items: PromptContextPreviewItem[]) {
+  return items
+    .flatMap((item) => {
+      const nextWarnings = [];
+      if (item.note) {
+        nextWarnings.push(`${item.name}: ${item.note}`);
+      }
+      if (item.textTruncated && item.note !== "Attachment text was truncated before prompt injection.") {
+        nextWarnings.push(`${item.name}: Context was truncated before provider submission.`);
+      }
+      return nextWarnings;
+    })
+    .filter((warning, index, values) => values.indexOf(warning) === index);
+}
+
+function describeProvider(provider: ProviderConfig) {
+  const endpointRisk = classifyProviderEndpoint(provider.kind, provider.endpoint);
+  const providerHost = (() => {
+    try {
+      return new URL(provider.endpoint).host;
+    } catch {
+      return provider.endpoint;
+    }
+  })();
+  const requiresCloudReview = providerIsCloud(provider.kind);
+  const requiresExplicitOptIn = endpointRisk.isAdvanced;
+
+  return {
+    endpointRisk,
+    providerHost,
+    requiresCloudReview,
+    requiresExplicitOptIn,
   };
 }
 
@@ -62,39 +104,25 @@ export function buildPromptContextPreview(
   provider: ProviderConfig,
 ): PromptContextPreview {
   const { preparedPrompt } = buildPromptWithAttachments(prompt, files);
-  const attachments = files.map(describeAttachment);
-  const endpointRisk = classifyProviderEndpoint(provider.kind, provider.endpoint);
-  const providerHost = (() => {
-    try {
-      return new URL(provider.endpoint).host;
-    } catch {
-      return provider.endpoint;
-    }
-  })();
-  const warnings = attachments
-    .flatMap((file) => {
-      const nextWarnings = [];
-      if (file.note) {
-        nextWarnings.push(`${file.name}: ${file.note}`);
-      }
-      if (file.textTruncated) {
-        nextWarnings.push(`${file.name}: Attachment text was truncated before prompt injection.`);
-      }
-      return nextWarnings;
-    })
-    .filter((warning, index, values) => values.indexOf(warning) === index);
-  const requiresCloudReview = providerIsCloud(provider.kind);
-  const requiresExplicitOptIn = endpointRisk.isAdvanced;
-  const requiresReview = requiresCloudReview || requiresExplicitOptIn || attachments.length > 0;
+  const contextItems = files.map(describeAttachment);
+  const { endpointRisk, providerHost, requiresCloudReview, requiresExplicitOptIn } =
+    describeProvider(provider);
+  const warnings = buildPreviewWarnings(contextItems);
+  const requiresReview = requiresCloudReview || requiresExplicitOptIn || contextItems.length > 0;
   const reviewReason = requiresExplicitOptIn
     ? "Advanced endpoint opt-in is required before this send."
     : requiresCloudReview
       ? "Cloud-bound sends require review before PilotBell transmits the prompt."
-      : attachments.length > 0
+      : contextItems.length > 0
         ? "Attachment context is queued for this send."
         : "Review this send before continuing.";
 
   return {
+    title: "Prompt context review",
+    helperText: "This is the exact prompt body that will be sent once approved.",
+    contextTitle: "Attachments",
+    emptyContextMessage: "No local attachment context is queued for this send.",
+    approveLabel: requiresExplicitOptIn ? "I understand, send anyway" : "Send reviewed prompt",
     preparedPrompt,
     providerLabel: `${provider.name} / ${provider.model || "model not set"}`,
     providerEndpoint: provider.endpoint,
@@ -105,11 +133,94 @@ export function buildPromptContextPreview(
         ? `Cloud provider. ${endpointRisk.message}`
         : `Local provider. ${endpointRisk.message}`,
     },
-    attachments,
+    contextItems,
     warnings,
     estimatedChars: preparedPrompt.length,
     requiresCloudReview,
     requiresReview,
+    requiresExplicitOptIn,
+    secretWillBeUsed: providerRequiresApiKey(provider.kind),
+    storedSecretAvailable:
+      providerRequiresApiKey(provider.kind) && provider.hasSecret,
+    reviewReason,
+  };
+}
+
+function buildDocumentPrompt(context: DocumentReviewContext) {
+  const normalizedMarkdown = context.markdownContent.replace(/\r\n/g, "\n").trim();
+  const includedMarkdown = normalizedMarkdown.slice(0, MAX_DOCUMENT_CONTEXT_CHARS);
+  const textTruncated = normalizedMarkdown.length > MAX_DOCUMENT_CONTEXT_CHARS;
+  const omittedCharCount = Math.max(0, normalizedMarkdown.length - includedMarkdown.length);
+  const promptSections = [
+    "You are revising a PilotBell-generated Markdown review report for clarity and final wording.",
+    "Preserve all factual content, headings, bullet structure, warnings, uncertainty, and explicit limitations from the source.",
+    "Do not invent facts, figures, conclusions, or source details that are not present in the provided Markdown.",
+    "Return Markdown only.",
+    "",
+    `Selected template: ${context.selectedTemplate}`,
+    `Source file: ${context.fileName}`,
+    "",
+    "PilotBell-generated Markdown review draft:",
+    includedMarkdown,
+  ];
+
+  return {
+    preparedPrompt: promptSections.join("\n"),
+    includedMarkdown,
+    sourceCharCount: normalizedMarkdown.length,
+    omittedCharCount,
+    textTruncated,
+  };
+}
+
+export function buildDocumentContextPreview(
+  context: DocumentReviewContext,
+  provider: ProviderConfig,
+): PromptContextPreview {
+  const prompt = buildDocumentPrompt(context);
+  const { endpointRisk, providerHost, requiresCloudReview, requiresExplicitOptIn } =
+    describeProvider(provider);
+  const contextItems: PromptContextPreviewItem[] = [
+    {
+      id: context.jobId,
+      name: `${context.fileName} review draft`,
+      detail: `${prompt.sourceCharCount.toLocaleString()} source characters / markdown report draft`,
+      excerpt: prompt.includedMarkdown,
+      note: prompt.textTruncated
+        ? `Document review Markdown was truncated by ${prompt.omittedCharCount.toLocaleString()} characters before provider submission.`
+        : "Full generated Markdown is included in this provider send.",
+      textTruncated: prompt.textTruncated,
+      includedCharCount: prompt.includedMarkdown.length,
+    },
+  ];
+  const warnings = buildPreviewWarnings(contextItems);
+  const reviewReason = requiresExplicitOptIn
+    ? "Advanced endpoint opt-in is required before PilotBell sends document-derived context."
+    : requiresCloudReview
+      ? "Cloud-bound sends require review before PilotBell transmits document-derived context."
+      : "Document-derived Markdown is queued for this send.";
+
+  return {
+    title: "Document context review",
+    helperText: "This provider payload is built from the same helper that prepares the real document-wording prompt.",
+    contextTitle: "Document context",
+    emptyContextMessage: "No reviewable document context is queued for this send.",
+    approveLabel: requiresExplicitOptIn ? "I understand, send anyway" : "Send reviewed wording prompt",
+    preparedPrompt: prompt.preparedPrompt,
+    providerLabel: `${provider.name} / ${provider.model || "model not set"}`,
+    providerEndpoint: provider.endpoint,
+    providerHost,
+    providerRisk: {
+      tone: endpointRisk.tone,
+      summary: providerIsCloud(provider.kind)
+        ? `Cloud provider. ${endpointRisk.message}`
+        : `Local provider. ${endpointRisk.message}`,
+    },
+    contextItems,
+    warnings,
+    estimatedChars: prompt.preparedPrompt.length,
+    requiresCloudReview,
+    requiresReview: true,
     requiresExplicitOptIn,
     secretWillBeUsed: providerRequiresApiKey(provider.kind),
     storedSecretAvailable:
