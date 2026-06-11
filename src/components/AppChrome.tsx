@@ -1,4 +1,4 @@
-import type { ComponentType, MouseEvent, SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
 import { ChromeActions } from "./ChromeActions";
 import { WindowControls } from "./WindowControls";
 
@@ -7,7 +7,6 @@ type AppChromeProps = {
   showSettingsButton?: boolean;
   isMaximized: boolean;
   onOpenSettings: () => void;
-  onStartDrag: () => void;
   onMinimize: () => void;
   onToggleMaximize: () => void;
   onClose: () => void;
@@ -23,7 +22,6 @@ export function AppChrome({
   showSettingsButton = true,
   isMaximized,
   onOpenSettings,
-  onStartDrag,
   onMinimize,
   onToggleMaximize,
   onClose,
@@ -33,29 +31,13 @@ export function AppChrome({
   RestoreIcon,
   CloseIcon,
 }: AppChromeProps) {
-  function handleDragMouseDown(event: MouseEvent<HTMLElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-
-    onStartDrag();
-  }
-
   return (
     <header className="app-chrome">
-      <div
-        className="app-chrome__brand"
-        data-tauri-drag-region
-        onMouseDown={handleDragMouseDown}
-      >
+      <div className="app-chrome__brand" data-tauri-drag-region="deep">
         <span className="window-badge">{title}</span>
       </div>
 
-      <div
-        className="app-chrome__drag-spacer"
-        data-tauri-drag-region
-        onMouseDown={handleDragMouseDown}
-      />
+      <div className="app-chrome__drag-spacer" data-tauri-drag-region="deep" />
 
       <div className="app-chrome__actions">
         {showSettingsButton ? (

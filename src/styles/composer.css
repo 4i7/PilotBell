@@ -37,6 +37,8 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
+  max-height: 96px;
+  overflow-y: auto;
 }
 
 .context-preview-panel {
@@ -48,6 +50,8 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-shell);
   background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  max-height: min(40vh, 360px);
+  overflow-y: auto;
 }
 
 .context-preview-grid {
@@ -566,6 +570,8 @@
   margin: 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-panel);
+  max-height: 180px;
+  overflow-y: auto;
   color: var(--text-secondary);
   background: var(--bg-subtle);
   white-space: pre-wrap;

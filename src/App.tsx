@@ -250,7 +250,6 @@ function App() {
     closeWindow,
     dismissGlobalShortcutNotice,
     minimizeWindow,
-    startWindowDrag,
     toggleMaximizeWindow,
   } = useTauriWindowShell({
     browserPreviewMessage: BROWSER_PREVIEW_MESSAGE,
@@ -402,7 +401,6 @@ function App() {
             title="PilotBell"
             isMaximized={isWindowMaximized}
             onOpenSettings={() => openSettings("providers")}
-            onStartDrag={() => void startWindowDrag()}
             onMinimize={() => void minimizeWindow()}
             onToggleMaximize={() => void toggleMaximizeWindow()}
             onClose={() => void closeWindow()}
@@ -503,7 +501,6 @@ function App() {
         activeSection={settingsSection}
         onSectionChange={setSettingsSection}
         onClose={isSettingsWindow ? () => void closeWindow() : closeSettings}
-        onStartDrag={() => void startWindowDrag()}
         onMinimize={() => void minimizeWindow()}
         onToggleMaximize={() => void toggleMaximizeWindow()}
         panelRef={settingsPanelRef}
