@@ -23,11 +23,13 @@
 
 .settings-window-page .settings-panel {
   width: 100%;
-  min-height: 100vh;
   height: 100vh;
   border: 0;
   border-radius: 0;
   box-shadow: none;
+  /* The window chrome is the topmost element here; padding above it would
+     leave a non-draggable blank strip over the title bar. */
+  padding-top: 0;
 }
 
 .settings-window-chrome {
