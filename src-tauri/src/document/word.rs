@@ -273,9 +273,10 @@ fn facts_table(analysis: &DocumentAnalysis) -> Table {
 
 fn preview_table(analysis: &DocumentAnalysis, max_rows: usize) -> Table {
     if analysis.preview.is_empty() {
-        return Table::new(vec![TableRow::new(vec![table_cell(
+        return Table::new(vec![TableRow::new(vec![table_cell_with_width(
             "No preview rows were produced for this document.",
             false,
+            9600,
         )])])
         .set_grid(vec![9600]);
     }
@@ -292,12 +293,13 @@ fn preview_table(analysis: &DocumentAnalysis, max_rows: usize) -> Table {
         (0..column_count)
             .map(|index| format!("Column {}", index + 1))
             .collect::<Vec<_>>(),
+        grid_width,
     )];
 
     for row in preview_rows {
         let cells = (0..column_count)
             .map(|index| row.get(index).cloned().unwrap_or_else(|| "-".into()))
-            .map(|value| table_cell(&value, false))
+            .map(|value| table_cell_with_width(&value, false, grid_width))
             .collect::<Vec<_>>();
         rows.push(TableRow::new(cells));
     }
@@ -314,11 +316,11 @@ fn fixed_header_row<const N: usize>(values: [&str; N]) -> TableRow {
     )
 }
 
-fn dynamic_header_row(values: Vec<String>) -> TableRow {
+fn dynamic_header_row(values: Vec<String>, width: usize) -> TableRow {
     TableRow::new(
         values
             .into_iter()
-            .map(|value| table_cell(&value, true))
+            .map(|value| table_cell_with_width(&value, true, width))
             .collect(),
     )
 }
@@ -328,6 +330,10 @@ fn key_value_row(label: &str, value: &str) -> TableRow {
 }
 
 fn table_cell(value: &str, emphasize: bool) -> TableCell {
+    table_cell_with_width(value, emphasize, if emphasize { 2600 } else { 7000 })
+}
+
+fn table_cell_with_width(value: &str, emphasize: bool, width: usize) -> TableCell {
     let paragraph = if emphasize {
         Paragraph::new()
             .add_run(Run::new().add_text(value).bold())
@@ -339,7 +345,7 @@ fn table_cell(value: &str, emphasize: bool) -> TableCell {
     };
 
     TableCell::new()
-        .width(if emphasize { 2600 } else { 7000 }, WidthType::Dxa)
+        .width(width, WidthType::Dxa)
         .add_paragraph(paragraph)
 }
 
@@ -470,6 +476,33 @@ mod tests {
                 let _ = fs::remove_file(&path);
             }
         }
+    }
+
+    #[test]
+    fn preview_table_cells_use_computed_grid_widths() {
+        let analysis = excel_fixture_analysis();
+        let path = unique_docx_path("excel-preview-widths");
+        write_docx(&path, &analysis, DocumentTemplate::SummaryReport.id())
+            .expect("DOCX should be written");
+
+        let document_xml = read_docx_entry(&path, "word/document.xml");
+        let expected_preview_width = (9600 / analysis.preview[0].len()).to_string();
+
+        assert!(
+            document_xml.contains("w:tcW") && document_xml.contains("w:w=\"2600\""),
+            "key/value table key cells should keep the existing 2600 twip width"
+        );
+        assert!(
+            document_xml.contains("w:tcW") && document_xml.contains("w:w=\"7000\""),
+            "key/value table value cells should keep the existing 7000 twip width"
+        );
+        assert!(
+            document_xml.contains("w:tcW")
+                && document_xml.contains(&format!("w:w=\"{expected_preview_width}\"")),
+            "preview table cells should use the computed per-column grid width"
+        );
+
+        let _ = fs::remove_file(&path);
     }
 
     fn pdf_fixture_analysis() -> DocumentAnalysis {
