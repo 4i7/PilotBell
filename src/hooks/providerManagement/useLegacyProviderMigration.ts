@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 
 import {
   DEFAULT_PROVIDER_KIND,
@@ -46,11 +46,17 @@ export function useLegacyProviderMigration({
   setProviders,
   toneForProviderError,
 }: UseLegacyProviderMigrationOptions) {
+  const hasRunRef = useRef(false);
+  const onScrubbedRef = useRef(onLegacySecretsScrubbed);
+  const toneForProviderErrorRef = useRef(toneForProviderError);
+
+  onScrubbedRef.current = onLegacySecretsScrubbed;
+  toneForProviderErrorRef.current = toneForProviderError;
+
   useEffect(() => {
     function scrubLegacyProviders(message: string, tone: ProviderStatus["tone"]) {
-      const sanitizedProviders = replaceLegacyProvidersWithMetadata(legacyProviders);
-      setProviders(sanitizedProviders);
-      onLegacySecretsScrubbed?.();
+      setProviders((current) => replaceLegacyProvidersWithMetadata(legacyProviders, current));
+      onScrubbedRef.current?.();
       setProviderStatus({
         tone,
         message,
@@ -60,6 +66,10 @@ export function useLegacyProviderMigration({
 
     if (!isTauriRuntime) {
       if (legacyProviders.length > 0) {
+        if (hasRunRef.current) {
+          return;
+        }
+        hasRunRef.current = true;
         scrubLegacyProviders(
           "Legacy browser-stored API keys were removed because secure migration requires the Tauri desktop runtime. Re-save each provider API key from settings.",
           "warning",
@@ -84,6 +94,11 @@ export function useLegacyProviderMigration({
       return;
     }
 
+    if (hasRunRef.current) {
+      return;
+    }
+    hasRunRef.current = true;
+
     let cancelled = false;
 
     async function migrateLegacyProviders() {
@@ -99,7 +114,7 @@ export function useLegacyProviderMigration({
           if (!cancelled) {
             scrubLegacyProviders(
               "Legacy provider migration failed. Browser-stored API keys were removed instead of being left behind. Resolve credential-store access, then re-save each provider API key.",
-              toneForProviderError(result.error),
+              toneForProviderErrorRef.current(result.error),
             );
           }
           return;
@@ -123,7 +138,13 @@ export function useLegacyProviderMigration({
       }
 
       setProviders((current) => {
-        const next = [...current, ...migratedProviders];
+        // A provider id can exist in both metadata and legacy form in the
+        // stored list; the freshly migrated record supersedes it.
+        const migratedIds = new Set(migratedProviders.map((provider) => provider.id));
+        const next = [
+          ...current.filter((provider) => !migratedIds.has(provider.id)),
+          ...migratedProviders,
+        ];
         saveProviders(next);
         return next;
       });
@@ -138,15 +159,16 @@ export function useLegacyProviderMigration({
 
     return () => {
       cancelled = true;
+      // A cancelled run rolls its secrets back, so let a later effect run
+      // (e.g. the StrictMode dev remount) start the migration over.
+      hasRunRef.current = false;
     };
   }, [
     browserPreviewMessage,
     isTauriRuntime,
     legacyProviders,
-    onLegacySecretsScrubbed,
     setIsMigratingProviders,
     setProviderStatus,
     setProviders,
-    toneForProviderError,
   ]);
 }

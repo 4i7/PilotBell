@@ -85,10 +85,29 @@ export function sanitizeLegacyProvidersToMetadata(
 
 export function replaceLegacyProvidersWithMetadata(
   legacyProviders: LegacyProviderConfig[],
+  currentProviders: ProviderConfig[],
 ): ProviderConfig[] {
   const sanitizedProviders = sanitizeLegacyProvidersToMetadata(legacyProviders);
-  saveProviders(sanitizedProviders);
-  return sanitizedProviders;
+  const providerIds: string[] = [];
+  const providersById = new Map<string, ProviderConfig>();
+
+  for (const provider of currentProviders) {
+    if (!providersById.has(provider.id)) {
+      providerIds.push(provider.id);
+    }
+    providersById.set(provider.id, provider);
+  }
+
+  for (const provider of sanitizedProviders) {
+    if (!providersById.has(provider.id)) {
+      providerIds.push(provider.id);
+    }
+    providersById.set(provider.id, provider);
+  }
+
+  const mergedProviders = providerIds.map((id) => providersById.get(id)!);
+  saveProviders(mergedProviders);
+  return mergedProviders;
 }
 
 export function loadProviderState(): LoadedProviderState {
