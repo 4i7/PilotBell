@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROMPT_INPUT_PREFERENCES } from "../domain/inputPreferences";
 import type { AttachedPromptFile } from "../domain/prompt";
 import type { ProviderConfig } from "../domain/provider";
-import { sendProviderPrompt } from "../lib/providerCommands";
+import { diagnoseProviderSecret, sendProviderPrompt } from "../lib/providerCommands";
 import { usePromptSending } from "./usePromptSending";
 
 vi.mock("../lib/providerCommands", () => ({
+  diagnoseProviderSecret: vi.fn(),
   sendProviderPrompt: vi.fn(),
 }));
 
@@ -79,6 +80,14 @@ describe("usePromptSending attachment overrides", () => {
         model: provider.model,
       },
     });
+    vi.mocked(diagnoseProviderSecret).mockResolvedValue({
+      status: "success",
+      data: {
+        providerId: provider.id,
+        hasSecret: false,
+        message: "No stored secret is required.",
+      },
+    });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -132,7 +141,7 @@ describe("usePromptSending attachment overrides", () => {
       );
     });
 
-    act(() => {
+    await act(async () => {
       api.requestPromptSubmit();
     });
     expect(sendProviderPrompt).not.toHaveBeenCalled();

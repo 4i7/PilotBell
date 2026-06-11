@@ -60,7 +60,7 @@ export function useDocumentLlmAssist({
     setReplyError(null);
   }
 
-  function requestReview(source: ReviewableDocumentJob) {
+  async function requestReview(source: ReviewableDocumentJob) {
     if (!isTauriRuntime) {
       setReplyError(localValidationError(browserPreviewMessage));
       setStatus({
@@ -91,7 +91,7 @@ export function useDocumentLlmAssist({
       return;
     }
 
-    const preview = buildDocumentContextPreview(source, selectedProvider);
+    const preview = await buildDocumentContextPreview(source, selectedProvider);
     setPendingReview({
       preview,
       source,

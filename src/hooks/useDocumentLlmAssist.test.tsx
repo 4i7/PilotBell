@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReviewableDocumentJob } from "../domain/document";
 import type { ProviderConfig } from "../domain/provider";
-import { sendProviderPrompt } from "../lib/providerCommands";
+import { diagnoseProviderSecret, sendProviderPrompt } from "../lib/providerCommands";
 import { useDocumentLlmAssist } from "./useDocumentLlmAssist";
 
 vi.mock("../lib/providerCommands", () => ({
+  diagnoseProviderSecret: vi.fn(),
   sendProviderPrompt: vi.fn(),
 }));
 
@@ -49,6 +50,15 @@ describe("useDocumentLlmAssist", () => {
 
   beforeEach(() => {
     vi.mocked(sendProviderPrompt).mockReset();
+    vi.mocked(diagnoseProviderSecret).mockReset();
+    vi.mocked(diagnoseProviderSecret).mockResolvedValue({
+      status: "success",
+      data: {
+        providerId: provider.id,
+        hasSecret: true,
+        message: "Stored provider secret is available.",
+      },
+    });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -65,8 +75,8 @@ describe("useDocumentLlmAssist", () => {
   });
 
   it("clears pending document context review before jobs are cleared", async () => {
-    act(() => {
-      api.requestDocumentAssistReview(reviewableJob);
+    await act(async () => {
+      await api.requestDocumentAssistReview(reviewableJob);
     });
 
     expect(api.pendingDocumentContextPreview).not.toBeNull();

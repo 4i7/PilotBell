@@ -11,6 +11,9 @@ export function PromptContextPreviewPanel({
   onApprove,
   onCancel,
 }: PromptContextPreviewPanelProps) {
+  const storedSecretAvailabilityLabel =
+    preview.storedSecretAvailabilitySource === "metadata" ? " (metadata)" : "";
+
   return (
     <section
       className="context-preview-panel"
@@ -38,6 +41,7 @@ export function PromptContextPreviewPanel({
           </p>
           <p className="context-preview-meta">
             Stored API key available: {preview.storedSecretAvailable ? "Yes" : "No"}
+            {storedSecretAvailabilityLabel}
           </p>
           <p className="context-preview-meta">
             Estimated prompt size: {preview.estimatedChars.toLocaleString()} characters

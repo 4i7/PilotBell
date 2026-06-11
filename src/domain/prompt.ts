@@ -40,5 +40,6 @@ export type PromptContextPreview = {
   requiresExplicitOptIn: boolean;
   secretWillBeUsed: boolean;
   storedSecretAvailable: boolean;
+  storedSecretAvailabilitySource: "diagnosed" | "metadata";
   reviewReason: string;
 };
