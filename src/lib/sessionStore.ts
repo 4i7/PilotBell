@@ -63,8 +63,21 @@ export function loadPromptSession(): PromptSessionEntry[] {
 }
 
 export function savePromptSession(entries: PromptSessionEntry[]) {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify(entries.slice(0, MAX_SESSION_ENTRIES)),
-  );
+  // A single oversized response can push the payload over the localStorage
+  // quota; history persistence must never break the send flow itself.
+  let next = entries.slice(0, MAX_SESSION_ENTRIES);
+  while (next.length > 0) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      return;
+    } catch {
+      next = next.slice(0, Math.floor(next.length / 2));
+    }
+  }
+
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage is unavailable entirely; keep the session in memory only.
+  }
 }
