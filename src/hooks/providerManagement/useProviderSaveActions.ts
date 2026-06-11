@@ -151,10 +151,8 @@ export function useProviderSaveActions({
     const normalized = normalizeProviderDraft(providerDraft);
     const requiresApiKey = providerRequiresApiKey(normalized.kind);
     const endpointRisk = classifyProviderEndpoint(normalized.kind, normalized.endpoint);
-    const hostedProviderKindChanged =
-      editingProvider.kind !== normalized.kind &&
-      providerRequiresApiKey(editingProvider.kind) &&
-      requiresApiKey;
+    const providerKindChanged = editingProvider.kind !== normalized.kind;
+    const providerKindChangedToSecretProvider = providerKindChanged && requiresApiKey;
     if (!isProviderDraftValid(normalized, { requireApiKey: false })) {
       setProviderStatus({
         tone: "warning",
@@ -171,10 +169,10 @@ export function useProviderSaveActions({
       return;
     }
 
-    if (hostedProviderKindChanged && !normalized.apiKey) {
+    if (providerKindChangedToSecretProvider && !normalized.apiKey) {
       setProviderStatus({
         tone: "warning",
-        message: "Provider update failed: switching hosted provider types requires a new API key.",
+        message: "Provider update failed: switching provider types requires a new API key.",
       });
       return;
     }
@@ -194,7 +192,7 @@ export function useProviderSaveActions({
       endpoint: normalized.endpoint,
       model: normalized.model,
       hasSecret: requiresApiKey
-        ? hostedProviderKindChanged
+        ? providerKindChangedToSecretProvider
           ? Boolean(normalized.apiKey)
           : editingProvider.hasSecret || Boolean(normalized.apiKey)
         : false,
@@ -241,7 +239,7 @@ export function useProviderSaveActions({
         tone: "success",
         message: !requiresApiKey
           ? `Updated ${nextProvider.name}. No API key is required for this provider. Run Test API to refresh readiness.`
-          : hostedProviderKindChanged
+          : providerKindChangedToSecretProvider
             ? `Updated ${nextProvider.name} and stored a new API key for the new provider type. Run Test API to refresh readiness.`
             : normalized.apiKey
               ? `Updated ${nextProvider.name} and replaced its stored API key. Run Test API to refresh readiness.`
