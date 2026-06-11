@@ -382,6 +382,7 @@ function App() {
     setPrompt(entry.prompt);
     void sendPrompt(entry.prompt, provider, {
       ...DEFAULT_PROMPT_INPUT_PREFERENCES,
+      attachments: [],
       clearOnSubmit: false,
       focusAfterSubmit: false,
       allowSubmitWhileSending: false,

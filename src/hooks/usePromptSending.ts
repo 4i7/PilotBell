@@ -30,12 +30,17 @@ type UsePromptSendingOptions = {
   toneForProviderError: (error: ProviderCommandError) => PromptStatus["tone"];
 };
 
+type SendPromptOptions = PromptInputPreferences & {
+  attachments?: AttachedPromptFile[];
+};
+
 type PendingPromptReview = {
   preview: PromptContextPreview;
   prompt: string;
   provider: ProviderConfig;
-  options: PromptInputPreferences;
+  options: SendPromptOptions;
   clearPromptOnSuccess: boolean;
+  attachments: AttachedPromptFile[];
 };
 
 function localValidationError(message: string): ProviderCommandError {
@@ -87,8 +92,9 @@ export function usePromptSending({
   async function performSend(
     targetPrompt: string,
     targetProvider: ProviderConfig,
-    options: PromptInputPreferences,
+    options: SendPromptOptions,
     clearPromptOnSuccess: boolean,
+    targetAttachments: AttachedPromptFile[],
     preview?: PromptContextPreview,
   ) {
     if (!isTauriRuntime) {
@@ -115,11 +121,11 @@ export function usePromptSending({
 
     try {
       const withAttachments =
-        preview ?? buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
+        preview ?? buildPromptContextPreview(targetPrompt, targetAttachments, targetProvider);
       const preparedPrompt =
-        attachedFiles.length > 0
+        targetAttachments.length > 0
           ? withAttachments.preparedPrompt
-          : buildPromptWithAttachments(targetPrompt, attachedFiles).preparedPrompt;
+          : buildPromptWithAttachments(targetPrompt, targetAttachments).preparedPrompt;
       const result = await sendProviderPrompt(preparedPrompt, targetProvider);
       if (result.status === "success") {
         addSessionEntry({
@@ -134,12 +140,14 @@ export function usePromptSending({
         if (clearPromptOnSuccess && options.clearOnSubmit) {
           setPrompt("");
         }
-        clearAttachments();
+        if (options.attachments === undefined) {
+          clearAttachments();
+        }
         setChatStatus({
           tone: "success",
           message:
-            attachedFiles.length > 0
-              ? `Responded with ${result.data.provider} / ${result.data.model} using ${attachedFiles.length} attachment(s).`
+            targetAttachments.length > 0
+              ? `Responded with ${result.data.provider} / ${result.data.model} using ${targetAttachments.length} attachment(s).`
               : `Responded with ${result.data.provider} / ${result.data.model}.`,
         });
       } else {
@@ -178,10 +186,11 @@ export function usePromptSending({
   async function sendPrompt(
     promptOverride?: string,
     providerOverride?: ProviderConfig,
-    options: PromptInputPreferences = inputPreferences,
+    options: SendPromptOptions = inputPreferences,
   ) {
     const targetPrompt = promptOverride ?? prompt;
     const targetProvider = providerOverride ?? selectedProvider;
+    const targetAttachments = options.attachments ?? attachedFiles;
 
     if (!targetProvider) {
       const error = localValidationError("Select a provider before sending.");
@@ -203,7 +212,7 @@ export function usePromptSending({
       return;
     }
 
-    const preview = buildPromptContextPreview(targetPrompt, attachedFiles, targetProvider);
+    const preview = buildPromptContextPreview(targetPrompt, targetAttachments, targetProvider);
     if (shouldGatePromptSend(preview)) {
       setPendingReview({
         preview,
@@ -211,6 +220,7 @@ export function usePromptSending({
         provider: targetProvider,
         options,
         clearPromptOnSuccess: promptOverride === undefined,
+        attachments: targetAttachments,
       });
       setChatStatus({
         tone: preview.requiresExplicitOptIn || preview.requiresCloudReview ? "warning" : "neutral",
@@ -219,7 +229,13 @@ export function usePromptSending({
       return;
     }
 
-    await performSend(targetPrompt, targetProvider, options, promptOverride === undefined);
+    await performSend(
+      targetPrompt,
+      targetProvider,
+      options,
+      promptOverride === undefined,
+      targetAttachments,
+    );
   }
 
   function cancelPromptReview() {
@@ -242,6 +258,7 @@ export function usePromptSending({
       nextReview.provider,
       nextReview.options,
       nextReview.clearPromptOnSuccess,
+      nextReview.attachments,
       nextReview.preview,
     );
   }
