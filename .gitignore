@@ -17,6 +17,9 @@ vite-dev.log
 # Build and test artifacts
 artifacts/
 
+# Local AI tooling state
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
