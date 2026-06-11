@@ -121,7 +121,7 @@ export function usePromptSending({
 
     try {
       const withAttachments =
-        preview ?? buildPromptContextPreview(targetPrompt, targetAttachments, targetProvider);
+        preview ?? await buildPromptContextPreview(targetPrompt, targetAttachments, targetProvider);
       const preparedPrompt =
         targetAttachments.length > 0
           ? withAttachments.preparedPrompt
@@ -212,7 +212,11 @@ export function usePromptSending({
       return;
     }
 
-    const preview = buildPromptContextPreview(targetPrompt, targetAttachments, targetProvider);
+    const preview = await buildPromptContextPreview(
+      targetPrompt,
+      targetAttachments,
+      targetProvider,
+    );
     if (shouldGatePromptSend(preview)) {
       setPendingReview({
         preview,

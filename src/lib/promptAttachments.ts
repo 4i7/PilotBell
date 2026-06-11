@@ -11,6 +11,7 @@ import type {
   PromptContextPreviewItem,
 } from "../domain/prompt";
 import { formatBytes } from "./formatters";
+import { diagnoseProviderSecret } from "./providerCommands";
 
 const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
 const MAX_ATTACHMENT_TEXT_CHARS = 8_000;
@@ -80,6 +81,52 @@ function buildPreviewWarnings(items: PromptContextPreviewItem[]) {
     .filter((warning, index, values) => values.indexOf(warning) === index);
 }
 
+const MISSING_STORED_SECRET_WARNING =
+  "Stored secret is unavailable; this send may fail. Re-enter the API key and save the provider again.";
+
+async function resolveStoredSecretAvailability(provider: ProviderConfig) {
+  if (!providerRequiresApiKey(provider.kind)) {
+    return {
+      secretWillBeUsed: false,
+      storedSecretAvailable: false,
+      storedSecretAvailabilitySource: "metadata" as const,
+    };
+  }
+
+  try {
+    const diagnosis = await diagnoseProviderSecret(provider.id);
+    if (diagnosis.status === "success") {
+      return {
+        secretWillBeUsed: true,
+        storedSecretAvailable: diagnosis.data.hasSecret,
+        storedSecretAvailabilitySource: "diagnosed" as const,
+      };
+    }
+  } catch {
+    // Browser previews and unavailable Tauri runtimes fall back to metadata.
+  }
+
+  return {
+    secretWillBeUsed: true,
+    storedSecretAvailable: provider.hasSecret,
+    storedSecretAvailabilitySource: "metadata" as const,
+  };
+}
+
+function appendStoredSecretWarning(
+  warnings: string[],
+  secretWillBeUsed: boolean,
+  storedSecretAvailable: boolean,
+) {
+  if (!secretWillBeUsed || storedSecretAvailable) {
+    return warnings;
+  }
+
+  return [...warnings, MISSING_STORED_SECRET_WARNING].filter(
+    (warning, index, values) => values.indexOf(warning) === index,
+  );
+}
+
 function describeProvider(provider: ProviderConfig) {
   const endpointRisk = classifyProviderEndpoint(provider.kind, provider.endpoint);
   const providerHost = (() => {
@@ -100,16 +147,21 @@ function describeProvider(provider: ProviderConfig) {
   };
 }
 
-export function buildPromptContextPreview(
+export async function buildPromptContextPreview(
   prompt: string,
   files: AttachedPromptFile[],
   provider: ProviderConfig,
-): PromptContextPreview {
+): Promise<PromptContextPreview> {
   const { preparedPrompt } = buildPromptWithAttachments(prompt, files);
   const contextItems = files.map(describeAttachment);
   const { endpointRisk, providerHost, requiresCloudReview, requiresExplicitOptIn } =
     describeProvider(provider);
-  const warnings = buildPreviewWarnings(contextItems);
+  const secretAvailability = await resolveStoredSecretAvailability(provider);
+  const warnings = appendStoredSecretWarning(
+    buildPreviewWarnings(contextItems),
+    secretAvailability.secretWillBeUsed,
+    secretAvailability.storedSecretAvailable,
+  );
   const requiresReview = requiresCloudReview || requiresExplicitOptIn || contextItems.length > 0;
   const reviewReason = requiresExplicitOptIn
     ? "Advanced endpoint opt-in is required before this send."
@@ -141,9 +193,9 @@ export function buildPromptContextPreview(
     requiresCloudReview,
     requiresReview,
     requiresExplicitOptIn,
-    secretWillBeUsed: providerRequiresApiKey(provider.kind),
-    storedSecretAvailable:
-      providerRequiresApiKey(provider.kind) && provider.hasSecret,
+    secretWillBeUsed: secretAvailability.secretWillBeUsed,
+    storedSecretAvailable: secretAvailability.storedSecretAvailable,
+    storedSecretAvailabilitySource: secretAvailability.storedSecretAvailabilitySource,
     reviewReason,
   };
 }
@@ -182,10 +234,10 @@ function redactDocumentLocalPaths(markdown: string) {
   return markdown.replace(/^(\s*-\s*Path:\s*)`[^`\n]*`/gim, `$1\`${REDACTED_LOCAL_PATH}\``);
 }
 
-export function buildDocumentContextPreview(
+export async function buildDocumentContextPreview(
   context: DocumentReviewContext,
   provider: ProviderConfig,
-): PromptContextPreview {
+): Promise<PromptContextPreview> {
   const prompt = buildDocumentPrompt(context);
   const { endpointRisk, providerHost, requiresCloudReview, requiresExplicitOptIn } =
     describeProvider(provider);
@@ -202,7 +254,12 @@ export function buildDocumentContextPreview(
       includedCharCount: prompt.includedMarkdown.length,
     },
   ];
-  const warnings = buildPreviewWarnings(contextItems);
+  const secretAvailability = await resolveStoredSecretAvailability(provider);
+  const warnings = appendStoredSecretWarning(
+    buildPreviewWarnings(contextItems),
+    secretAvailability.secretWillBeUsed,
+    secretAvailability.storedSecretAvailable,
+  );
   const reviewReason = requiresExplicitOptIn
     ? "Advanced endpoint opt-in is required before PilotBell sends document-derived context."
     : requiresCloudReview
@@ -231,9 +288,9 @@ export function buildDocumentContextPreview(
     requiresCloudReview,
     requiresReview: true,
     requiresExplicitOptIn,
-    secretWillBeUsed: providerRequiresApiKey(provider.kind),
-    storedSecretAvailable:
-      providerRequiresApiKey(provider.kind) && provider.hasSecret,
+    secretWillBeUsed: secretAvailability.secretWillBeUsed,
+    storedSecretAvailable: secretAvailability.storedSecretAvailable,
+    storedSecretAvailabilitySource: secretAvailability.storedSecretAvailabilitySource,
     reviewReason,
   };
 }
