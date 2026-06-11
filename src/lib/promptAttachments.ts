@@ -15,6 +15,7 @@ import { formatBytes } from "./formatters";
 const MAX_ATTACHMENT_TEXT_BYTES = 200_000;
 const MAX_ATTACHMENT_TEXT_CHARS = 8_000;
 const MAX_DOCUMENT_CONTEXT_CHARS = 12_000;
+const REDACTED_LOCAL_PATH = "[redacted local path]";
 
 export type DocumentReviewContext = {
   jobId: string;
@@ -148,7 +149,9 @@ export function buildPromptContextPreview(
 }
 
 function buildDocumentPrompt(context: DocumentReviewContext) {
-  const normalizedMarkdown = context.markdownContent.replace(/\r\n/g, "\n").trim();
+  const normalizedMarkdown = redactDocumentLocalPaths(
+    context.markdownContent.replace(/\r\n/g, "\n").trim(),
+  );
   const includedMarkdown = normalizedMarkdown.slice(0, MAX_DOCUMENT_CONTEXT_CHARS);
   const textTruncated = normalizedMarkdown.length > MAX_DOCUMENT_CONTEXT_CHARS;
   const omittedCharCount = Math.max(0, normalizedMarkdown.length - includedMarkdown.length);
@@ -173,6 +176,10 @@ function buildDocumentPrompt(context: DocumentReviewContext) {
     omittedCharCount,
     textTruncated,
   };
+}
+
+function redactDocumentLocalPaths(markdown: string) {
+  return markdown.replace(/^(\s*-\s*Path:\s*)`[^`\n]*`/gim, `$1\`${REDACTED_LOCAL_PATH}\``);
 }
 
 export function buildDocumentContextPreview(

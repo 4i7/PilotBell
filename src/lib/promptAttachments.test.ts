@@ -66,4 +66,32 @@ describe("prompt context review signals", () => {
     expect(preview.preparedPrompt).toContain("PilotBell-generated Markdown review draft:");
     expect(preview.helperText).toContain("same helper");
   });
+
+  it("redacts local paths from document wording provider payloads", () => {
+    const preview = buildDocumentContextPreview(
+      {
+        jobId: "document-1",
+        fileName: "Q2-report.pdf",
+        selectedTemplate: "summary-report",
+        markdownContent:
+          "# Review\n\n## Source\n\n- File: `Q2-report.pdf`\n- Path: `C:\\Users\\4i7\\Private\\Q2-report.pdf`\n- Type: `pdf`",
+      },
+      {
+        id: "provider-openai",
+        kind: "openai-responses",
+        name: "OpenAI",
+        endpoint: "https://api.openai.com/v1/responses",
+        model: "gpt-4.1-mini",
+        hasSecret: true,
+        advancedEndpoint: false,
+      },
+    );
+
+    expect(preview.preparedPrompt).not.toContain("C:\\Users\\4i7\\Private\\Q2-report.pdf");
+    expect(preview.contextItems[0]?.excerpt).not.toContain(
+      "C:\\Users\\4i7\\Private\\Q2-report.pdf",
+    );
+    expect(preview.preparedPrompt).toContain("- Path: `[redacted local path]`");
+    expect(preview.contextItems[0]?.excerpt).toContain("- Path: `[redacted local path]`");
+  });
 });
