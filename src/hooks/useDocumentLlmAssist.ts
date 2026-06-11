@@ -56,6 +56,8 @@ export function useDocumentLlmAssist({
 
   function clearResult() {
     setLastResult(null);
+    setPendingReview(null);
+    setReplyError(null);
   }
 
   function requestReview(source: ReviewableDocumentJob) {
