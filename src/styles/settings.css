@@ -18,14 +18,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--settings-panel-padding-y) var(--settings-panel-padding-x);
+  padding: var(--settings-panel-padding-y) 0 0;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-shell);
   background: color-mix(in srgb, var(--bg-shell-strong) 96%, transparent);
   box-shadow: var(--shadow-popover);
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
 }
 
 .settings-header {
@@ -33,6 +31,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
+  padding: 0 var(--settings-panel-padding-x);
 }
 
 .settings-window-page {
@@ -74,10 +73,23 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  margin: 0 var(--settings-panel-padding-x);
   padding: var(--space-1);
   border-radius: 999px;
   background: var(--bg-subtle);
   width: fit-content;
+}
+
+.settings-content {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--settings-panel-padding-x) var(--settings-panel-padding-y);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 .settings-tab {

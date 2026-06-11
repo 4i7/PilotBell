@@ -9,7 +9,7 @@
     "build:windows-installer": "tauri build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "tauri:dev": "node scripts/check-dev-port.mjs && tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build",
     "test": "vitest run"
   },

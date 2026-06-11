@@ -8,7 +8,12 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import {
+  currentMonitor,
+  getCurrentWindow,
+  LogicalSize,
+  PhysicalPosition,
+} from "@tauri-apps/api/window";
 
 import { isSettingsSection, type SettingsSection } from "../domain/settings";
 
@@ -58,6 +63,49 @@ const MAIN_WINDOW_LAYOUTS = {
   },
 } as const;
 
+const CHAT_SIZE_STORAGE_KEY = "pilotbell.mainWindow.chatSize.v1";
+const WORK_AREA_MARGIN = 24; // logical px
+
+type StoredChatSize = { width: number; height: number };
+
+function loadStoredChatSize(): StoredChatSize | null {
+  try {
+    const raw = localStorage.getItem(CHAT_SIZE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) {
+      return null;
+    }
+
+    const { width, height } = parsed as Partial<StoredChatSize>;
+    if (
+      typeof width !== "number" ||
+      typeof height !== "number" ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width < MAIN_WINDOW_LAYOUTS.chat.minWidth ||
+      height < 256
+    ) {
+      return null;
+    }
+
+    return { width, height };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredChatSize(size: StoredChatSize): void {
+  try {
+    localStorage.setItem(CHAT_SIZE_STORAGE_KEY, JSON.stringify(size));
+  } catch {
+    // Ignore storage failures (quota, privacy mode, etc.).
+  }
+}
+
 function loadGlobalShortcutNoticeHidden() {
   return localStorage.getItem(GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY) === "true";
 }
@@ -82,6 +130,8 @@ export function useTauriWindowShell({
   );
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const appliedMainWindowLayout = useRef<keyof typeof MAIN_WINDOW_LAYOUTS | null>(null);
+  const isApplyingLayoutRef = useRef(false);
+  const saveChatSizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reportedBrowserPreview = useRef(false);
 
   async function hidePaletteWindow() {
@@ -92,14 +142,6 @@ export function useTauriWindowShell({
     localStorage.setItem(GLOBAL_SHORTCUT_NOTICE_STORAGE_KEY, "true");
     setIsGlobalShortcutNoticeHidden(true);
     setChatStatus((current) => (current?.dismissKey === "global-shortcut" ? null : current));
-  }
-
-  async function startWindowDrag() {
-    if (!isTauriRuntime) {
-      return;
-    }
-
-    await getCurrentWindow().startDragging();
   }
 
   async function minimizeWindow() {
@@ -142,6 +184,26 @@ export function useTauriWindowShell({
     void syncWindowState();
     void currentWindow.onResized(async () => {
       await syncWindowState();
+
+      if (
+        !isSettingsWindow &&
+        appliedMainWindowLayout.current === "chat" &&
+        !isApplyingLayoutRef.current
+      ) {
+        clearTimeout(saveChatSizeTimerRef.current);
+        saveChatSizeTimerRef.current = setTimeout(async () => {
+          if (await currentWindow.isMaximized()) {
+            return; // Never persist the maximized size.
+          }
+
+          const size = await currentWindow.innerSize();
+          const scale = await currentWindow.scaleFactor();
+          saveStoredChatSize({
+            width: Math.round(size.width / scale),
+            height: Math.round(size.height / scale),
+          });
+        }, 250); // Debounce continuous writes during drag-resize.
+      }
     }).then((unlisten) => {
       unlistenResize = unlisten;
     });
@@ -149,8 +211,9 @@ export function useTauriWindowShell({
     return () => {
       cancelled = true;
       unlistenResize?.();
+      clearTimeout(saveChatSizeTimerRef.current);
     };
-  }, [isTauriRuntime]);
+  }, [isSettingsWindow, isTauriRuntime]);
 
   useEffect(() => {
     if (!isTauriRuntime || isSettingsWindow) {
@@ -163,18 +226,75 @@ export function useTauriWindowShell({
     }
 
     appliedMainWindowLayout.current = layoutName;
-    const layout = MAIN_WINDOW_LAYOUTS[layoutName];
     const currentWindow = getCurrentWindow();
 
     async function applyMainWindowLayout() {
-      await currentWindow.setMinSize(new LogicalSize(layout.minWidth, layout.minHeight));
+      const layout = MAIN_WINDOW_LAYOUTS[layoutName];
+      const monitor = await currentMonitor();
+
+      // Decide the target size in logical pixels (stored chat size included).
+      let width: number = layout.width;
+      let height: number = layout.height;
+      let minWidth: number = layout.minWidth;
+      let minHeight: number = layout.minHeight;
+      if (layoutName === "chat") {
+        const stored = loadStoredChatSize();
+        if (stored) {
+          ({ width, height } = stored);
+        }
+      }
+      if (monitor) {
+        const scale = monitor.scaleFactor;
+        const workAreaLogicalWidth = monitor.workArea.size.width / scale;
+        const workAreaLogicalHeight = monitor.workArea.size.height / scale;
+        const maxWidth = Math.floor(workAreaLogicalWidth - WORK_AREA_MARGIN);
+        const maxHeight = Math.floor(workAreaLogicalHeight - WORK_AREA_MARGIN);
+        width = Math.min(width, maxWidth);
+        height = Math.min(height, maxHeight);
+        // Cap min size too, otherwise setMinSize > setSize forces overflow.
+        minWidth = Math.min(minWidth, maxWidth);
+        minHeight = Math.min(minHeight, maxHeight);
+      }
+
+      await currentWindow.setMinSize(new LogicalSize(minWidth, minHeight));
 
       if (await currentWindow.isMaximized()) {
         return;
       }
 
-      await currentWindow.setSize(new LogicalSize(layout.width, layout.height));
-      await currentWindow.center();
+      isApplyingLayoutRef.current = true;
+      try {
+        await currentWindow.setSize(new LogicalSize(width, height));
+
+        if (monitor) {
+          // Keep the window where the user left it; only push it back into
+          // the work area if the resize made it overflow. All physical px.
+          const pos = await currentWindow.outerPosition();
+          const size = await currentWindow.outerSize();
+          const wa = monitor.workArea;
+          const clampedX = Math.max(
+            wa.position.x,
+            Math.min(pos.x, wa.position.x + wa.size.width - size.width),
+          );
+          const clampedY = Math.max(
+            wa.position.y,
+            Math.min(pos.y, wa.position.y + wa.size.height - size.height),
+          );
+          if (clampedX !== pos.x || clampedY !== pos.y) {
+            await currentWindow.setPosition(
+              new PhysicalPosition(Math.round(clampedX), Math.round(clampedY)),
+            );
+          }
+        } else {
+          await currentWindow.center();
+        }
+      } finally {
+        // The onResized event from setSize arrives late; release the guard
+        // after it has had a chance to fire.
+        setTimeout(() => {
+          isApplyingLayoutRef.current = false;
+        }, 200);
+      }
     }
 
     void applyMainWindowLayout().catch((error) => {
@@ -335,7 +455,6 @@ export function useTauriWindowShell({
     closeWindow,
     dismissGlobalShortcutNotice,
     minimizeWindow,
-    startWindowDrag,
     toggleMaximizeWindow,
   };
 }

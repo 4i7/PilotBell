@@ -87,12 +87,6 @@
 
 * {
   box-sizing: border-box;
-  scrollbar-width: none;
-}
-
-*::-webkit-scrollbar {
-  width: 0;
-  height: 0;
 }
 
 html,
@@ -115,9 +109,57 @@ body {
 }
 
 .chat-thread,
+.settings-content,
 .composer-input textarea,
-.settings-panel {
-  -ms-overflow-style: none;
+.context-preview-body,
+.detail,
+.attachment-strip,
+.context-preview-panel {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-gutter: stable;
+}
+
+.chat-thread::-webkit-scrollbar,
+.settings-content::-webkit-scrollbar,
+.composer-input textarea::-webkit-scrollbar,
+.context-preview-body::-webkit-scrollbar,
+.detail::-webkit-scrollbar,
+.attachment-strip::-webkit-scrollbar,
+.context-preview-panel::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.chat-thread::-webkit-scrollbar-track,
+.settings-content::-webkit-scrollbar-track,
+.composer-input textarea::-webkit-scrollbar-track,
+.context-preview-body::-webkit-scrollbar-track,
+.detail::-webkit-scrollbar-track,
+.attachment-strip::-webkit-scrollbar-track,
+.context-preview-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-thread::-webkit-scrollbar-thumb,
+.settings-content::-webkit-scrollbar-thumb,
+.composer-input textarea::-webkit-scrollbar-thumb,
+.context-preview-body::-webkit-scrollbar-thumb,
+.detail::-webkit-scrollbar-thumb,
+.attachment-strip::-webkit-scrollbar-thumb,
+.context-preview-panel::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.chat-thread::-webkit-scrollbar-thumb:hover,
+.settings-content::-webkit-scrollbar-thumb:hover,
+.composer-input textarea::-webkit-scrollbar-thumb:hover,
+.context-preview-body::-webkit-scrollbar-thumb:hover,
+.detail::-webkit-scrollbar-thumb:hover,
+.attachment-strip::-webkit-scrollbar-thumb:hover,
+.context-preview-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 button,

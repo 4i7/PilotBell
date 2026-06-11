@@ -4,7 +4,6 @@
   }
 
   .window-shell {
-    min-height: 100vh;
     border-radius: 0;
   }
 
@@ -24,11 +23,13 @@
 
 .settings-window-page .settings-panel {
   width: 100%;
-  min-height: 100vh;
   height: 100vh;
   border: 0;
   border-radius: 0;
   box-shadow: none;
+  /* The window chrome is the topmost element here; padding above it would
+     leave a non-draggable blank strip over the title bar. */
+  padding-top: 0;
 }
 
 .settings-window-chrome {
@@ -36,7 +37,7 @@
   align-items: center;
   gap: 8px;
   min-height: 52px;
-  margin: calc(var(--settings-panel-padding-y) * -1) calc(var(--settings-panel-padding-x) * -1) 0;
+  margin: 0;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-soft);
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-shell-strong) 90%, transparent) 0%, transparent 100%);
@@ -86,7 +87,6 @@
   }
 
   .window-shell {
-    min-height: 100vh;
     border-radius: 0;
   }
 
@@ -126,7 +126,6 @@
     --settings-panel-padding-y: 16px;
     border-radius: 20px;
     padding-top: 16px;
-    padding-bottom: 16px;
   }
 
   .settings-tabs {

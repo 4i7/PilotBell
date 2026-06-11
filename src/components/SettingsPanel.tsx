@@ -1,4 +1,4 @@
-import type { ComponentType, MouseEvent, ReactElement, ReactNode, RefObject, SVGProps } from "react";
+import type { ComponentType, ReactElement, ReactNode, RefObject, SVGProps } from "react";
 import { WindowControls } from "./WindowControls";
 import type {
   ResolvedTheme,
@@ -20,7 +20,6 @@ type SettingsPanelProps = {
   activeSection: SettingsSection;
   onSectionChange: (section: SettingsSection) => void;
   onClose: () => void;
-  onStartDrag?: () => void;
   onMinimize?: () => void;
   onToggleMaximize?: () => void;
   panelRef: RefObject<HTMLDivElement | null>;
@@ -43,7 +42,6 @@ export function SettingsPanel({
   activeSection,
   onSectionChange,
   onClose,
-  onStartDrag,
   onMinimize,
   onToggleMaximize,
   panelRef,
@@ -62,23 +60,11 @@ export function SettingsPanel({
     return null;
   }
 
-  function handleDragMouseDown(event: MouseEvent<HTMLElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-
-    onStartDrag?.();
-  }
-
   const panel = (
     <div className="settings-panel" ref={panelRef}>
       {mode === "window" ? (
         <header className="settings-window-chrome">
-          <div
-            className="settings-window-title"
-            data-tauri-drag-region
-            onMouseDown={handleDragMouseDown}
-          >
+          <div className="settings-window-title" data-tauri-drag-region="deep">
             <span className="window-badge">PilotBell Settings</span>
           </div>
           {MinusIcon && MaximizeIcon && RestoreIcon && onMinimize && onToggleMaximize ? (
@@ -175,7 +161,7 @@ export function SettingsPanel({
         </button>
       </div>
 
-      {children}
+      <div className="settings-content">{children}</div>
     </div>
   );
 
